@@ -14,7 +14,7 @@ INSTALL
   Copy the App folder from this zip to the root of the SD card (merge folders).
   It ends up as /mnt/SDCARD/App/ArchiveTV. Open "ArchiveTV" from Apps.
 
-HOME TABS (L1 / R1 to switch)
+HOME TABS (L1 / R1 or L2 / R2 to switch)
   Search  - search videos or collections; recent searches are kept
   Guide   - hand-picked collections by category (edit guide.txt)
   Saved   - your bookmarks: shows, collections and searches (Y anywhere saves)

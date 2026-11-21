@@ -241,6 +241,8 @@ static int list_loop_t(const char *title, int n, LabelFn fn, const char *footer,
             }
             if (e.type != SDL_KEYDOWN) continue;
             int k = e.key.keysym.sym, os = *sel;
+            if (k == K_L2) k = K_L1;   /* the back triggers do the same as the shoulders in lists */
+            if (k == K_R2) k = K_R1;
             if (k == K_X) { if (xdown == 0) xdown = now_s(); continue; }
             if (k == K_B && tab >= 0) continue;   /* B does nothing on the main tabs (MENU turns the app off) */
             if (k == K_MENU) {

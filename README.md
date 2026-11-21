@@ -40,8 +40,7 @@ It's also listed in [Mixtape](https://github.com/snyderman3000/mixtape).
 | START | do it now (play, search, open) | pause |
 | Y | save to Saved | show/hide time bar |
 | X | tap: delete / sort; hold: scroll long titles | screen off/on |
-| L1 / R1 | switch tab | ±1 min |
-| L2 / R2 | | ±5 min |
+| L1 / R1, L2 / R2 | switch tab | L1/R1 ±1 min, L2/R2 ±5 min |
 | SELECT | change theme | start over |
 | MENU | turn ArchiveTV off | stop |
 
