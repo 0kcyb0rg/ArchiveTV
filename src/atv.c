@@ -2750,7 +2750,8 @@ int main(int argc, char **argv) {
         "Let's watch old TV!", "Old TV was better, right?", "Hey, let's go back in time!",
         "I hate new anime, blehhh", "Let's go back to the 90s!", "Eat my shorts!",
     };
-    const char *say = SAY[(unsigned)(now_s() * 1000) % (sizeof SAY / sizeof SAY[0])];
+    struct timeval stv; gettimeofday(&stv, 0);   /* a different line each launch */
+    const char *say = SAY[(unsigned)(stv.tv_sec ^ stv.tv_usec) % (sizeof SAY / sizeof SAY[0])];
     ui_hello(say, 0, 0, now_s()); present(back);
     sfx_load();
     load_channels();
