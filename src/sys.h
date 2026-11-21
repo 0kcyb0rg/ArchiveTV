@@ -73,6 +73,7 @@ int kill(pid_t, int);
 int usleep(unsigned);
 int access(const char *, int);
 #define F_OK 0
+#define X_OK 1
 #define R_OK 4
 int unlink(const char *);
 int rename(const char *, const char *);

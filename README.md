@@ -14,7 +14,7 @@ A cute little TV for your Miyoo Mini. Browse, stream and download videos from th
 
 ## Devices
 
-One build for the whole SSD202D Miyoo family on **Onion OS 4.2+**:
+One build for the whole SSD202D Miyoo family on **Onion OS 4.2+**, and in beta on **spruceOS** and **sprigUI**:
 
 | Device | Screen |
 | --- | --- |
@@ -46,26 +46,28 @@ It's also listed in [Mixtape](https://github.com/snyderman3000/mixtape).
 
 ## How it works
 
-`archivetv` is a single C program on SDL 1.2. It plays video with the FFmpeg 2.4 libraries
-and fetches everything with the `curl` that ship with Onion OS, so the app bundles neither.
+`archivetv` is a single C program on SDL 1.2. It plays video with FFmpeg 2.4 (LGPL build in
+`App/ArchiveTV/libs`, made by `build-ffmpeg.sh`) and fetches everything with the system's `curl`
+(Onion OS or spruceOS).
 
 ### Building
 
 Needs `clang`, `lld` and `llvm` tools; no Miyoo SDK.
 
 ```sh
-mkdir libs
-cp /Volumes/MIYOO/.tmp_update/lib/parasyte/{libavcodec.so.56,libavformat.so.56,libavutil.so.54,libswresample.so.1} libs/
-sh build.sh            # -> build/archivetv
+sh build-ffmpeg.sh /path/to/miyoomini-toolchain   # FFmpeg libs -> App/ArchiveTV/libs
+mkdir -p libs && cp App/ArchiveTV/libs/* libs/    # build.sh links against these
+sh build.sh                                       # -> build/archivetv
 cp build/archivetv App/ArchiveTV/
 ```
+The toolchain is the [pre-built Miyoo Mini toolchain](https://github.com/shauninman/miyoomini-toolchain-buildroot/releases).
 
 ## Credits
 
 - Made by [@0kCyb0rg](https://x.com/0kCyb0rg) · [okcyborg.com](https://okcyborg.com)
 - Music: "Select a Level" by @0kCyb0rg · menu sounds by @0kCyb0rg
 - Font: [m5x7](https://managore.itch.io/m5x7) by Daniel Linssen
-- Video playback: [FFmpeg](https://ffmpeg.org) · downloads: [curl](https://curl.se) (both from Onion OS)
+- Video playback: [FFmpeg](https://ffmpeg.org) 2.4 (LGPL) · downloads: [curl](https://curl.se)
 - Videos: the Internet Archive. Please [donate](https://archive.org/donate).
 
 Code is MIT licensed; the music and sounds are not (see [LICENSE](LICENSE)).

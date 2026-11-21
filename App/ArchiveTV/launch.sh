@@ -1,5 +1,5 @@
 #!/bin/sh
-# ArchiveTV for Onion OS (Miyoo Mini family): browse, download and watch Internet Archive videos.
+# ArchiveTV for the Miyoo Mini family (Onion OS, spruceOS, sprigUI): browse, download and watch Internet Archive videos.
 APPDIR=$(cd "$(dirname "$0")" && pwd)
 cd "$APPDIR" || exit 1
 LOG="$APPDIR/log.txt"
@@ -8,8 +8,8 @@ VERIFY=1      # 1 = check HTTPS certificates, 0 = don't (only if loading fails b
 
 if [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 524288 ]; then mv "$LOG" "$LOG.old"; fi
 echo "--- $(date)" >> "$LOG"
-# FFmpeg comes with Onion OS (.tmp_update/lib/parasyte); App/ArchiveTV/libs is only a fallback
-export LD_LIBRARY_PATH="/mnt/SDCARD/miyoo/lib:/config/lib:/customer/lib:/mnt/SDCARD/.tmp_update/lib/parasyte:$APPDIR/libs:$LD_LIBRARY_PATH"
+# FFmpeg 2.4 (LGPL) ships in libs/, so the same folder runs on Onion OS and spruceOS / sprigUI
+export LD_LIBRARY_PATH="$APPDIR/libs:/mnt/SDCARD/miyoo/lib:/config/lib:/customer/lib:$LD_LIBRARY_PATH"
 # Without a clock battery the date can be very old, and certificates can't be checked then
 if [ "$(date +%Y)" -lt 2025 ]; then VERIFY=0; fi
 echo "System year: $(date +%Y) - TLS verification: $VERIFY" >> "$LOG"
@@ -19,7 +19,7 @@ chmod +x "$APPDIR/archivetv" 2>/dev/null
 GOVF=/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
 GOV=$(cat "$GOVF" 2>/dev/null)
 echo performance > "$GOVF" 2>/dev/null
-touch /tmp/stay_awake
+touch /tmp/stay_awake    # Onion: no auto-sleep while watching
 
 "$APPDIR/archivetv" "$APPDIR" "$ROTATE" >> "$LOG" 2>&1
 echo "exit code $?" >> "$LOG"

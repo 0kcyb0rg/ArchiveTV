@@ -7,12 +7,14 @@ DEVICES (one build for all of them)
   Miyoo Mini v4, Mini Flip      752x560 (full screen, thanks to the "full_resolution" file)
   Wi-Fi models (Mini Plus, Mini Flip) can browse and download.
   Models without Wi-Fi play videos you copy into App/ArchiveTV/videos from a computer.
-  Needs Onion OS 4.2 or newer (it uses the FFmpeg and curl that come with Onion).
+  Works on Onion OS 4.2+, and (beta, untested) on spruceOS and sprigUI.
+  It uses the curl that comes with the system and brings its own FFmpeg (libs/).
   If the picture is upside down on your model, set ROTATE=0 in launch.sh.
 
 INSTALL
   Copy the App folder from this zip to the root of the SD card (merge folders).
   It ends up as /mnt/SDCARD/App/ArchiveTV. Open "ArchiveTV" from Apps.
+  Same folder for Onion OS, spruceOS and sprigUI.
 
 HOME TABS (L1 / R1 or L2 / R2 to switch)
   Search  - search videos or collections; recent searches are kept
@@ -63,7 +65,7 @@ CREDITS
   Music: "Select a Level" by @0kCyb0rg
   Menu sounds by @0kCyb0rg
   Font: m5x7 by Daniel Linssen (managore.itch.io/m5x7)
-  Video playback: FFmpeg (ffmpeg.org), as shipped with Onion OS
-  Downloads: curl (curl.se), as shipped with Onion OS
+  Video playback: FFmpeg 2.4 (ffmpeg.org), LGPL, see licenses/
+  Downloads: curl (curl.se), as shipped with Onion OS / spruceOS
   CA certificates: Mozilla, via curl (MPL 2.0, see licenses/)
   Videos: Internet Archive - please donate at archive.org/donate

@@ -3,5 +3,7 @@
   "icon": "icon.png",
   "iconsel": "",
   "description": "Internet Archive videos (WiFi)",
-  "launch": "launch.sh"
+  "launch": "launch.sh",
+  "devices": ["MIYOO_MINI_FAMILY", "SPRIG_MIYOO_MINI_PLUS", "SPRIG_MIYOO_MINI_FLIP"],
+  "hideInSimpleMode": false
 }

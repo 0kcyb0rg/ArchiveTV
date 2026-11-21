@@ -540,7 +540,17 @@ static void urlenc(char *d, size_t cap, const char *s, int keep_slash) {
 
 /* ======================= HTTP: Onion's curl ======================= */
 /* Onion OS ships curl (with TLS) in .tmp_update; every web request goes through it. */
-#define CURL_BIN "/mnt/SDCARD/.tmp_update/bin/curl"
+/* curl: Onion keeps it in .tmp_update; spruceOS ships a static one in spruce/bin. Found once, at first use. */
+static const char *curl_bin(void) {
+    static const char *found = 0;
+    if (found) return found;
+    static const char *C[] = { "/mnt/SDCARD/.tmp_update/bin/curl", "/mnt/SDCARD/spruce/bin/curl", "/usr/bin/curl", "/bin/curl" };
+    for (int i = 0; i < 4; i++) if (access(C[i], X_OK) == 0 || access(C[i], F_OK) == 0) { found = C[i]; break; }
+    if (!found) found = C[0];
+    logf_("curl: %s", found);
+    return found;
+}
+#define CURL_BIN curl_bin()
 #define CURL_ENV "LD_LIBRARY_PATH=/mnt/SDCARD/.tmp_update/lib:/customer/lib:/mnt/SDCARD/miyoo/lib:$LD_LIBRARY_PATH"
 static void shq(char *d, size_t cap, const char *s) {   /* single-quote for sh */
     size_t k = 0;
@@ -1710,7 +1720,7 @@ static void queue_badge(char *b, size_t cap) {
 static void net_error(int err) {
     if (err == -5) return;   /* the user pressed B while it was loading */
     if (!has_wifi) { error_box("No Wi-Fi on this Miyoo.", "Copy videos into App/ArchiveTV/videos"); return; }
-    if (err == -6) error_box("Onion's curl is missing.", "(needs Onion OS 4.x)");
+    if (err == -6) error_box("curl is missing.", "(needs Onion OS 4.2+ or spruceOS)");
     else error_box("Network error. Is Wi-Fi on?", "(details in log.txt)");
 }
 typedef struct { char dst[900]; char url[2200]; char disp[200]; long long have, total; } PartF;

@@ -1,0 +1,4 @@
+The libraries in libs/ are FFmpeg 2.4.14 (https://ffmpeg.org), unmodified, licensed under the
+GNU LGPL 2.1 or later (see LGPL-2.1-FFmpeg.txt). Source: https://github.com/FFmpeg/FFmpeg/tree/n2.4.14
+Built with build-ffmpeg.sh from the ArchiveTV repository (https://github.com/mroxfordyazuka/ArchiveTV),
+which lists the exact configure options. You may replace these files with your own build.

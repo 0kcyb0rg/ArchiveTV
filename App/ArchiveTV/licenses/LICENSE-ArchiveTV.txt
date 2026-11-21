@@ -26,6 +26,7 @@ The MIT license above covers the code. These files are NOT under it:
   App/ArchiveTV/music/  "Select a Level" (c) 0kCyb0rg. All rights reserved.
   App/ArchiveTV/sfx/    menu sounds (c) 0kCyb0rg. All rights reserved.
                         Both may be redistributed unmodified as part of ArchiveTV.
+  App/ArchiveTV/libs/   FFmpeg 2.4.14, LGPL 2.1+ (see licenses/FFmpeg-NOTICE.txt).
   src/font_m5x7.h       m5x7 by Daniel Linssen (managore.itch.io/m5x7), used
                         under its own terms.
   App/ArchiveTV/cacert.pem  Mozilla CA bundle, MPL 2.0.
