@@ -216,9 +216,12 @@ static void settings_save(int tab);
 static void queue_badge(char *b, size_t cap);
 static void queue_tick(void);
 static int g_quit = 0;   /* set once the user says yes to "Turn off ArchiveTV?": every screen backs out */
+static void autooff_check(void);
 static int quit_ask(void);
 static int list_loop_t(const char *title, int n, LabelFn fn, const char *footer, int *sel, const char *empty, const char **status, int tab) {
     LM.on = 0;   /* a list is up: the loading screen is over */
+    if (g_quit) return K_MENU;
+    autooff_check();
     if (g_quit) return K_MENU;
     int bheld = 0; double xdown = 0, mpause = 0; double moff = 0, tlast = now_s();   /* moff = ms of title scrolling; holding X runs it faster */
     const char *theme_msg = 0; double theme_t = 0;
@@ -296,7 +299,7 @@ static int list_loop_t(const char *title, int n, LabelFn fn, const char *footer,
             rows_v[i].main = mains[i]; rows_v[i].side = sides[i]; rows_v[i].tone = tone;
         }
         char cnt[32]; snprintf(cnt, sizeof cnt, "%d/%d", n ? *sel + 1 : 0, n);
-        { static double lq = 0; if (t - lq > 0.3) { lq = t; queue_tick(); } }
+        { static double lq = 0; if (t - lq > 0.3) { lq = t; queue_tick(); autooff_check(); if (g_quit) { SDL_EnableKeyRepeat(0, 0); return K_MENU; } } }
         char qb[24]; queue_badge(qb, sizeof qb); ui_footer_badge(qb);
         ui_bg(t);
         if (tab >= 0) ui_header_tabs(TABS, 6, tab, 0, t);
@@ -344,6 +347,9 @@ static int menu_pick(const char *title, const char *const *items, int n) {
 static const char *SFX_NAMES[SFX_N] = { "move", "select", "back", "tab", "type", "toggle", "error", "done", "hello" };
 static int16_t *sfx_buf[SFX_N]; static int sfx_len[SFX_N];
 static int g_music = 1, g_sounds = 1;
+static int g_group = 1;     /* fold episodes of one show into a single row */
+static int g_autooff = 0;   /* power off when the download queue is done */
+static int g_off_armed = 0; /* a queued download finished since the queue was last idle */
 #define MRING (1 << 18)      /* 256 KB of music ready to play */
 static struct {
     int open;
@@ -1565,7 +1571,7 @@ static void settings_save(int tab) {
     if (tab >= 0) g_tab = tab;
     char p[700]; snprintf(p, sizeof p, "%s/settings.txt", appdir);
     FILE *f = fopen(p, "w"); if (!f) return;
-    fprintf(f, "theme %d\ntab %d\nscreen %d\nmusic %d\nsounds %d\nvsync %d\n", g_theme, g_tab, g_fx, g_music, g_sounds, g_vsync);
+    fprintf(f, "theme %d\ntab %d\nscreen %d\nmusic %d\nsounds %d\nvsync %d\ngroup %d\nautooff %d\n", g_theme, g_tab, g_fx, g_music, g_sounds, g_vsync, g_group, g_autooff);
     fclose(f);
 }
 /* reads one setting before everything else is up (the screen mode is picked before settings_load) */
@@ -1588,6 +1594,8 @@ static void settings_load(void) {
         else if (!strncmp(line, "screen ", 7)) g_fx = atoi(line + 7);
         else if (!strncmp(line, "music ", 6)) g_music = atoi(line + 6) != 0;
         else if (!strncmp(line, "sounds ", 7)) g_sounds = atoi(line + 7) != 0;
+        else if (!strncmp(line, "group ", 6)) g_group = atoi(line + 6) != 0;
+        else if (!strncmp(line, "autooff ", 8)) g_autooff = atoi(line + 8) != 0;
     }
     fclose(f);
     if (g_theme < 0 || g_theme >= ui_theme_count()) g_theme = 1;
@@ -1684,7 +1692,7 @@ static void queue_tick(void) {
         dl_reap(&DLQ);
         sfx(ok ? SFX_DONE : SFX_ERROR);
         if (q_active >= 0 && q_active < nq) {
-            if (ok) { int i = q_active; q_active = -1; q_remove(i, 0); }
+            if (ok) { int i = q_active; q_active = -1; q_remove(i, 0); if (g_autooff) g_off_armed = 1; }
             else if (!Q[q_active].failed) { Q[q_active].failed = 1; q_save(); }
         }
         q_active = -1;
@@ -1699,6 +1707,43 @@ static void queue_tick(void) {
             break;
         }
     }
+}
+/* "Turn off after downloads": once a queued download has finished and nothing is left to fetch,
+   count down 30 s (B keeps it on), then save and power the handheld off. */
+static void autooff_check(void) {
+    if (!g_autooff || !g_off_armed || SR.in_player) return;
+    if (DLQ.state == 1 || DLW.state == 1) return;
+    for (int i = 0; i < nq; i++) if (!Q[i].failed && access(Q[i].dst, F_OK) != 0) return;   /* still work to do */
+    g_off_armed = 0;
+    logf_("downloads finished: turning off in 30 s unless cancelled");
+    flush_keys();
+    double t0 = now_s(), last = -1;
+    for (;;) {
+        double t = now_s();
+        int left = 30 - (int)(t - t0);
+        if (left <= 0) break;
+        if ((int)last != left) {
+            char l1s[64]; snprintf(l1s, sizeof l1s, "Turning off in %d s", left);
+            message_m("Downloads done!", l1s, "Sleep tight, little TV", MOOD_SLEEP, "A:Turn off now  B:Keep on");
+            last = left;
+        }
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) if (e.type == SDL_KEYDOWN) {
+            int k = e.key.keysym.sym;
+            if (k == K_B || k == K_MENU) { logf_("power off cancelled"); sfx(SFX_BACK); flush_keys(); return; }
+            if (k == K_A || k == K_START) { t0 = t - 31; break; }
+        }
+        usleep(50000);
+    }
+    logf_("powering off");
+    settings_save(-1); q_save();
+    message_m("Good night!", "Turning off...", 0, MOOD_SLEEP, 0);
+    menu_audio_stop();
+    sync();
+    usleep(400000);
+    /* Onion and spruce both run as root on the Mini; busybox poweroff does a clean shutdown */
+    if (system("sync; poweroff") != 0) system("sync; reboot -p");
+    g_quit = 1;
 }
 static int quit_ask(void) {
     int k2 = ask("ArchiveTV", "Turn off ArchiveTV?", nq ? "Downloads resume next time" : 0, MOOD_SLEEP, "A:Yes  B:No");
@@ -2110,6 +2155,131 @@ static void lbl_file(int i, char *m, size_t mc, char *s, size_t sc, int *tone) {
     *tone = f->rank == 0 ? 1 : f->rank >= 3 ? 3 : 0;
     if (f->h > 480) *tone = 2;
 }
+
+/* ---------- episodes of one show folded into a single row ---------- */
+/* compares names the way people count: "Ep 2" before "Ep 10" */
+static int natcmp(const char *a, const char *b) {
+    for (;;) {
+        if (!*a || !*b) return (unsigned char)*a - (unsigned char)*b;
+        if (*a >= '0' && *a <= '9' && *b >= '0' && *b <= '9') {
+            while (*a == '0') a++;
+            while (*b == '0') b++;
+            const char *ea = a, *eb = b;
+            while (*ea >= '0' && *ea <= '9') ea++;
+            while (*eb >= '0' && *eb <= '9') eb++;
+            if (ea - a != eb - b) return (int)(ea - a) - (int)(eb - b);
+            for (; a < ea; a++, b++) if (*a != *b) return *a - *b;
+            continue;
+        }
+        int ca = tolower((unsigned char)*a), cb = tolower((unsigned char)*b);
+        if (ca != cb) return ca - cb;
+        a++; b++;
+    }
+}
+static int is_num(const char *t) { if (!*t) return 0; for (; *t; t++) if (*t < '0' || *t > '9') return 0; return 1; }
+/* a word that says "an episode number comes here": 12, ep, ep12, e05, s01e02, #3, part, vol, disc... */
+static int is_ep_word(const char *w) {
+    char t[40]; size_t n = 0;
+    for (; *w && n < sizeof t - 1; w++) t[n++] = (char)tolower((unsigned char)*w);
+    t[n] = 0;
+    if (is_num(t)) return n <= 4;
+    static const char *W[] = { "ep", "eps", "episode", "episodes", "e", "ch", "chapter", "part", "pt", "vol", "volume", "disc", "disk", "no", "act", "reel", 0 };
+    for (int i = 0; W[i]; i++) if (!strcmp(t, W[i])) return 1;
+    const char *d = t;
+    if (*d == 's' && d[1] >= '0' && d[1] <= '9') { d++; while (*d >= '0' && *d <= '9') d++; if (*d == 'e' || !*d) return 1; }
+    if ((t[0] == 'e' && is_num(t + 1)) || (!strncmp(t, "ep", 2) && is_num(t + 2)) || (t[0] == '#' && is_num(t + 1))) return 1;
+    return 0;
+}
+/* "Sailor Moon - 012 [x264].mp4" -> key "sailor moon", show "Sailor Moon". 0 = doesn't look like an episode. */
+static int series_key(const char *in, char *key, size_t kc, char *show, size_t sc) {
+    char b[260]; size_t n = 0; int depth = 0;
+    const char *dot = strrchr(in, '.');
+    if (dot && strlen(dot) <= 5 && strlen(dot) >= 3 && isalpha((unsigned char)dot[1])) {} else dot = 0;
+    for (const char *p = in; *p && (!dot || p < dot) && n < sizeof b - 1; p++) {   /* drop [tags] (notes) {crc} */
+        if (*p == '[' || *p == '(' || *p == '{') { depth++; continue; }
+        if (*p == ']' || *p == ')' || *p == '}') { if (depth) depth--; continue; }
+        if (depth) continue;
+        char c = *p;
+        if (c == '_' || c == '.' || c == '-' || c == '~' || c == ',' || c == ':' || c == '|') c = ' ';
+        b[n++] = c;
+    }
+    b[n] = 0;
+    key[0] = show[0] = 0;
+    size_t kl = 0, sl = 0; int words = 0, found = 0;
+    for (char *w = strtok(b, " \t"); w; w = strtok(0, " \t")) {
+        char *h = w; if (*h == '#' && h[1]) { if (is_num(h + 1) && words) { found = 1; break; } }
+        if (words && is_ep_word(w)) { found = 1; break; }
+        if (!words && is_num(w)) return 0;   /* starts with a number: probably a year or a list position */
+        size_t L = strlen(w);
+        if (kl + L + 2 >= kc || sl + L + 2 >= sc) break;
+        if (words) { key[kl++] = ' '; show[sl++] = ' '; }
+        for (size_t i = 0; i < L; i++) { key[kl++] = (char)tolower((unsigned char)w[i]); show[sl++] = w[i]; }
+        key[kl] = show[sl] = 0;
+        words++;
+    }
+    if (found && kl >= 3) return 1;
+    /* "Show Name - Episode Title" with no number: the part before " - " names the show */
+    const char *dash = strstr(in, " - ");
+    if (dash && dash > in && (size_t)(dash - in) < 200) {
+        char tmp[220]; size_t L = (size_t)(dash - in);
+        memcpy(tmp, in, L); memcpy(tmp + L, " 1", 3);
+        return series_key(tmp, key, kc, show, sc);
+    }
+    return 0;
+}
+/* Shared folding: for n names, gid[i] = the series row it belongs to (-1 = stands alone).
+   A show needs 3+ episodes to get its own row. */
+#define GMAX 2000
+typedef struct { char key[96]; char show[120]; int n, first; } Series;
+static Series *g_ser; static int g_nser;
+static int g_gid[GMAX];
+static int *g_sord; static char (*g_keys)[96];
+static int cmp_sord(const void *a, const void *b) { int x = *(const int *)a, y = *(const int *)b; int c = strcmp(g_keys[x], g_keys[y]); return c ? c : x - y; }
+static void series_build(int n, const char *(*name)(int)) {
+    if (n > GMAX) n = GMAX;
+    if (!g_ser) { g_ser = (Series *)calloc(GMAX, sizeof(Series)); g_sord = (int *)calloc(GMAX, sizeof(int)); g_keys = calloc(GMAX, 96); }
+    g_nser = 0;
+    if (!g_ser || !g_sord || !g_keys) { for (int i = 0; i < n; i++) g_gid[i] = -1; return; }
+    static char shows[GMAX][120];
+    for (int i = 0; i < n; i++) {
+        g_gid[i] = -1;
+        if (!g_group || !series_key(name(i), g_keys[i], 96, shows[i], 120)) g_keys[i][0] = 0;
+        g_sord[i] = i;
+    }
+    qsort(g_sord, (size_t)n, sizeof(int), cmp_sord);
+    for (int a = 0; a < n;) {
+        int b = a + 1;
+        while (b < n && !strcmp(g_keys[g_sord[a]], g_keys[g_sord[b]])) b++;
+        if (g_keys[g_sord[a]][0] && b - a >= 3) {
+            Series *sr = &g_ser[g_nser];
+            snprintf(sr->key, sizeof sr->key, "%s", g_keys[g_sord[a]]);
+            snprintf(sr->show, sizeof sr->show, "%s", shows[g_sord[a]]);
+            sr->n = b - a; sr->first = g_sord[a];   /* sorted by key then index: the first one in list order */
+            for (int j = a; j < b; j++) g_gid[g_sord[j]] = g_nser;
+            g_nser++;
+        }
+        a = b;
+    }
+}
+/* the rows shown: a series sits where its first episode was. rows[] >= 0 = entry, < 0 = -(series+1) */
+static int series_rows(int n, int *rows) {
+    int r = 0;
+    for (int i = 0; i < n && i < GMAX; i++) {
+        if (g_gid[i] < 0) rows[r++] = i;
+        else if (g_ser[g_gid[i]].first == i) rows[r++] = -(g_gid[i] + 1);
+    }
+    return r;
+}
+/* members of one series, in episode order */
+static const char *(*g_mname)(int);
+static int cmp_members(const void *a, const void *b) { return natcmp(g_mname(*(const int *)a), g_mname(*(const int *)b)); }
+static int series_members(int n, int sid, int *out, const char *(*name)(int)) {
+    int m = 0;
+    for (int i = 0; i < n && i < GMAX; i++) if (g_gid[i] == sid) out[m++] = i;
+    g_mname = name;
+    qsort(out, (size_t)m, sizeof(int), cmp_members);
+    return m;
+}
 static int cmp_file(const void *a, const void *b) {
     const VFile *x = (const VFile *)a, *y = (const VFile *)b;
     if (x->rank != y->rank) return x->rank - y->rank;
@@ -2165,6 +2335,61 @@ static int load_item(const char *id) {
     logf_("item %s: %d video files", id, nfiles);
     return 0;
 }
+/* the actions on one file of an item: A = menu, START = watch right away */
+static void file_act(const char *id, int fi, int k, const char **status) {
+    VFile *f = &files[fi];
+    char sn[300], p[1000], url[2200];
+    local_path(p, sizeof p, sn, sizeof sn, id, f->name);
+    if (k == K_START && f->size <= 2000000000LL) { watch(id, f->name, f->disp); f->have = access(p, F_OK) == 0; return; }
+    if (k != K_A && k != K_START) return;
+    if (f->size > 2000000000LL) { *status = "Too big (over 2 GB) - pick another file"; return; }
+    f->have = access(p, F_OK) == 0;
+    int queued = q_find(p) >= 0;
+    const char *opts_new[] = { "Watch now", queued ? "Already in queue" : "Add to download queue", "Add to playlist...", "Back" };
+    const char *opts_have[] = { "Watch", "Add to playlist...", "Delete from card", "Back" };
+    int c = menu_pick(f->disp, f->have ? opts_have : opts_new, 4);
+    if (c < 0) return;
+    const char *act = f->have ? opts_have[c] : opts_new[c];
+    if (!strcmp(act, "Watch now") || !strcmp(act, "Watch")) { watch(id, f->name, f->disp); f->have = access(p, F_OK) == 0; }
+    else if (!strcmp(act, "Add to download queue")) {
+        dl_url(url, sizeof url, id, f->name);
+        int r = q_add(url, p, f->disp);
+        *status = r == 0 ? "Added to the queue (see Files tab)" : r == 1 ? "Already in the queue" : "Queue is full";
+        queue_tick();
+    } else if (!strcmp(act, "Add to playlist...")) {
+        char pl[64];
+        if (pl_choose(pl, sizeof pl)) { *status = pl_append(pl, id, f->name, f->disp) == 0 ? "Added to playlist!" : "Could not save"; }
+    } else if (!strcmp(act, "Delete from card")) {
+        unlink(p); resume_set(sn, 0); sync(); f->have = 0; *status = "Deleted.";
+    }
+}
+static int g_file_sort = 0;   /* 0 = best quality first, 1 = A to Z (episode order) */
+static int cmp_file_az(const void *a, const void *b) {
+    const VFile *x = (const VFile *)a, *y = (const VFile *)b;
+    int c = natcmp(x->disp, y->disp);
+    return c ? c : x->rank - y->rank;
+}
+static const char *fname_i(int i) { return files[i].disp; }
+static int irow[GMAX], nirow, gmem[GMAX], ngmem;
+static void lbl_irow(int r, char *m, size_t mc, char *s, size_t sc, int *tone) {
+    int v = irow[r];
+    if (v >= 0) { lbl_file(v, m, mc, s, sc, tone); return; }
+    Series *sr = &g_ser[-v - 1];
+    snprintf(m, mc, "%s", sr->show); snprintf(s, sc, "%d eps", sr->n); *tone = 4;
+}
+static void lbl_gmem(int r, char *m, size_t mc, char *s, size_t sc, int *tone) { lbl_file(gmem[r], m, mc, s, sc, tone); }
+/* the episodes of one show inside an item, in episode order */
+static void screen_series_files(const char *id, int sid) {
+    char title[120]; snprintf(title, sizeof title, "%s", g_ser[sid].show);
+    ngmem = series_members(nfiles, sid, gmem, fname_i);
+    int sel = 0; const char *status = "";
+    for (;;) {
+        int k = list_loop(title, ngmem, lbl_gmem, "A:Menu  START:Watch  B:Back", &sel, "Nothing here.", &status);
+        if (k == K_B || k == K_MENU) return;
+        status = "";
+        if (ngmem) file_act(id, gmem[sel], k, &status);
+    }
+}
 static void screen_item(const char *id, const char *fallback_title) {
     char t[120]; l1(t, sizeof t, fallback_title);
     message("Tuning in...", "Tuning in...", t, "B:Cancel");
@@ -2172,44 +2397,33 @@ static void screen_item(const char *id, const char *fallback_title) {
     if (err) { net_error(err); return; }
     char my_title[200], my_title8[300];
     snprintf(my_title, sizeof my_title, "%s", item_title); snprintf(my_title8, sizeof my_title8, "%s", item_title8);
+    if (g_file_sort) qsort(files, (size_t)nfiles, sizeof(VFile), cmp_file_az);
     int sel = 0;
     const char *status = "";
     for (;;) {
-        int k = list_loop(my_title, nfiles, lbl_file, "A:Menu  START:Watch  Y:Save", &sel, "No video files in this item.", &status);
+        series_build(nfiles, fname_i);
+        nirow = series_rows(nfiles, irow);
+        if (sel >= nirow) sel = nirow ? nirow - 1 : 0;
+        int k = list_loop(my_title, nirow, lbl_irow, "A:Menu  X:Sort  Y:Save", &sel, "No video files in this item.", &status);
         if (k == K_B || k == K_MENU) return;
         if (k == K_Y) { status = save_msg(chan_add("item", id, my_title8)); continue; }
-        status = "";
-        if ((k != K_A && k != K_START) || !nfiles) continue;
-        VFile *f = &files[sel];
-        if (k == K_START && f->size <= 2000000000LL) { watch(id, f->name, f->disp); { char sn2[300], p2[1000]; local_path(p2, sizeof p2, sn2, sizeof sn2, id, f->name); f->have = access(p2, F_OK) == 0; } continue; }
-        if (f->size > 2000000000LL) { status = "Too big (over 2 GB) - pick another file"; continue; }
-        char sn[300], p[1000], url[2200];
-        local_path(p, sizeof p, sn, sizeof sn, id, f->name);
-        f->have = access(p, F_OK) == 0;
-        int queued = q_find(p) >= 0;
-        const char *opts_new[] = { "Watch now", queued ? "Already in queue" : "Add to download queue", "Add to playlist...", "Back" };
-        const char *opts_have[] = { "Watch", "Add to playlist...", "Delete from card", "Back" };
-        int c = menu_pick(f->disp, f->have ? opts_have : opts_new, 4);
-        if (c < 0) continue;
-        const char *act = f->have ? opts_have[c] : opts_new[c];
-        if (!strcmp(act, "Watch now") || !strcmp(act, "Watch")) { watch(id, f->name, f->disp); f->have = access(p, F_OK) == 0; }
-        else if (!strcmp(act, "Add to download queue")) {
-            dl_url(url, sizeof url, id, f->name);
-            int r = q_add(url, p, f->disp);
-            status = r == 0 ? "Added to the queue (see Files tab)" : r == 1 ? "Already in the queue" : "Queue is full";
-            queue_tick();
-        } else if (!strcmp(act, "Add to playlist...")) {
-            char pl[64];
-            if (pl_choose(pl, sizeof pl)) { status = pl_append(pl, id, f->name, f->disp) == 0 ? "Added to playlist!" : "Could not save"; }
-        } else if (!strcmp(act, "Delete from card")) {
-            unlink(p); resume_set(sn, 0); sync(); f->have = 0; status = "Deleted.";
+        if (k == K_X) {
+            g_file_sort = !g_file_sort;
+            qsort(files, (size_t)nfiles, sizeof(VFile), g_file_sort ? cmp_file_az : cmp_file);
+            sel = 0; status = g_file_sort ? "Sorted: A to Z (episode order)" : "Sorted: best quality first";
+            continue;
         }
+        status = "";
+        if ((k != K_A && k != K_START) || !nirow) continue;
+        int v = irow[sel];
+        if (v < 0) { screen_series_files(id, -v - 1); continue; }
+        file_act(id, v, k, &status);
     }
 }
 
 /* ---------- lists of items (collections and searches) ---------- */
-static const char *SORTS[3] = { "downloads+desc", "addeddate+desc", "titleSorter+asc" };
-static const char *SORTN[3] = { "Sorted: most popular", "Sorted: newest", "Sorted: A to Z" };
+static const char *SORTS[4] = { "downloads+desc", "addeddate+desc", "addeddate+asc", "titleSorter+asc" };
+static const char *SORTN[4] = { "Sorted: most popular", "Sorted: newest", "Sorted: oldest", "Sorted: A to Z" };
 static void lbl_item(int i, char *m, size_t mc, char *s, size_t sc, int *tone) {
     if (i == nitems) { snprintf(m, mc, "More... (%d of %d)", nitems, items_found); *tone = 4; return; }
     snprintf(m, mc, "%s", items[i].title);
@@ -2221,7 +2435,7 @@ static int load_items(const Chan *c, int page, int sort) {
     else if (c->type == CH_CSEARCH) snprintf(q, sizeof q, "(%s) AND mediatype:(collection)", c->arg);
     else snprintf(q, sizeof q, "(%s) AND mediatype:(movies)", c->arg);
     urlenc(qe, sizeof qe, q, 0);
-    snprintf(url, sizeof url, "https://archive.org/advancedsearch.php?q=%s&fl%%5B%%5D=identifier&fl%%5B%%5D=title&fl%%5B%%5D=mediatype&rows=100&page=%d&sort%%5B%%5D=%s&output=json", qe, page, SORTS[sort % 3]);
+    snprintf(url, sizeof url, "https://archive.org/advancedsearch.php?q=%s&fl%%5B%%5D=identifier&fl%%5B%%5D=title&fl%%5B%%5D=mediatype&rows=100&page=%d&sort%%5B%%5D=%s&output=json", qe, page, SORTS[sort % 4]);
     int err = 0;
     char *js = http_get(url, &err);
     if (!js) return err ? err : -1;
@@ -2262,6 +2476,48 @@ static void items_pop(ItemsSave *s) {
     if (s->v) { memcpy(items, s->v, sizeof(Item) * (size_t)s->n); free(s->v); }
     nitems = s->n; items_found = s->found; items_page = s->page;
 }
+static void screen_collection(const Chan *c);
+static const char *iname_i(int i) { return items[i].title; }
+static int crow[GMAX], ncrow;
+static void lbl_crow(int r, char *m, size_t mc, char *s, size_t sc, int *tone) {
+    if (r >= ncrow) { lbl_item(nitems, m, mc, s, sc, tone); return; }   /* "More..." */
+    int v = crow[r];
+    if (v >= 0) { lbl_item(v, m, mc, s, sc, tone); return; }
+    Series *sr = &g_ser[-v - 1];
+    snprintf(m, mc, "%s", sr->show); snprintf(s, sc, "%d", sr->n); *tone = 4;
+}
+/* opens one search result: a video item, or a collection inside this one */
+static void open_item_idx(int idx) {
+    Item it = items[idx];
+    ItemsSave sv; items_push(&sv);
+    if (it.coll) {
+        Chan sub; memset(&sub, 0, sizeof sub);
+        sub.type = CH_COLLECTION;
+        snprintf(sub.arg, sizeof sub.arg, "%s", it.id);
+        snprintf(sub.title, sizeof sub.title, "%s", it.title);
+        screen_collection(&sub);
+    } else screen_item(it.id, it.title8);
+    items_pop(&sv);
+}
+static int *smem_cur; static int nsmem_cur;
+static void lbl_smem(int r, char *m, size_t mc, char *s, size_t sc, int *tone) { lbl_item(smem_cur[r], m, mc, s, sc, tone); }
+/* results that look like episodes of one show, in episode order */
+static void screen_series_items(int sid) {
+    char title[120]; snprintf(title, sizeof title, "%s", g_ser[sid].show);
+    int *mem = (int *)malloc(sizeof(int) * GMAX); if (!mem) return;
+    int nm = series_members(nitems, sid, mem, iname_i);
+    int sel = 0; const char *status = "";
+    for (;;) {
+        smem_cur = mem; nsmem_cur = nm;
+        int k = list_loop(title, nm, lbl_smem, "A:Open  Y:Save  B:Back", &sel, "Nothing here.", &status);
+        if (k == K_START) k = K_A;
+        if (k == K_B || k == K_MENU) break;
+        if (k == K_Y && nm) { status = save_msg(chan_add(items[mem[sel]].coll ? "collection" : "item", items[mem[sel]].id, items[mem[sel]].title8)); continue; }
+        status = "";
+        if (k == K_A && nm) open_item_idx(mem[sel]);
+    }
+    free(mem);
+}
 static void screen_collection(const Chan *c) {
     int sort = 0;
     message("Tuning in...", "Tuning in...", c->title, "B:Cancel");
@@ -2272,37 +2528,33 @@ static void screen_collection(const Chan *c) {
     const char *empty = c->type == CH_COLLECTION ? "No videos in this collection." : "Nothing found. Try other words?";
     for (;;) {
         int more = nitems < items_found && nitems < 2000;
-        int k = list_loop(c->title, nitems + more, lbl_item, "A:Open  Y:Save  X:Sort  B:Back", &sel, empty, &status);
+        series_build(nitems, iname_i);
+        ncrow = series_rows(nitems, crow);
+        if (sel > ncrow + more - 1) sel = ncrow + more ? ncrow + more - 1 : 0;
+        int k = list_loop(c->title, ncrow + more, lbl_crow, "A:Open  Y:Save  X:Sort  B:Back", &sel, empty, &status);
         if (k == K_START) k = K_A;
         if (k == K_B || k == K_MENU) return;
-        if (k == K_Y && sel < nitems) { status = save_msg(chan_add(items[sel].coll ? "collection" : "item", items[sel].id, items[sel].title8)); continue; }
+        int v = sel < ncrow ? crow[sel] : -100000;
+        if (k == K_Y && sel < ncrow && v >= 0) { status = save_msg(chan_add(items[v].coll ? "collection" : "item", items[v].id, items[v].title8)); continue; }
         if (k == K_X) {
-            sort = (sort + 1) % 3;
+            sort = (sort + 1) % 4;
             message("Tuning in...", "Re-sorting...", c->title, "B:Cancel");
             int e2 = load_items(c, 1, sort);
-            if (e2) { net_error(e2); if (e2 != -5) return; sort = (sort + 2) % 3; continue; }
+            if (e2) { net_error(e2); if (e2 != -5) return; sort = (sort + 3) % 4; continue; }
             sel = 0; status = SORTN[sort];
             continue;
         }
         status = "";
         if (k != K_A) continue;
-        if (more && sel == nitems) {
+        if (more && sel == ncrow) {
             message("Tuning in...", "Loading more...", c->title, "B:Cancel");
             int e2 = load_items(c, items_page + 1, sort);
             if (e2) net_error(e2);
             continue;
         }
-        if (sel >= nitems) continue;
-        Item it = items[sel];
-        ItemsSave sv; items_push(&sv);
-        if (it.coll) {
-            Chan sub; memset(&sub, 0, sizeof sub);
-            sub.type = CH_COLLECTION;
-            snprintf(sub.arg, sizeof sub.arg, "%s", it.id);
-            snprintf(sub.title, sizeof sub.title, "%s", it.title);
-            screen_collection(&sub);
-        } else screen_item(it.id, it.title8);
-        items_pop(&sv);
+        if (sel >= ncrow) continue;
+        if (v < 0) screen_series_items(-v - 1);
+        else open_item_idx(v);
     }
 }
 static void open_chan(const Chan *c) {
@@ -2525,6 +2777,8 @@ static void lbl_tab_settings(int i, char *m, size_t mc, char *s, size_t sc, int 
     case 2: snprintf(m, mc, "Scanlines"); snprintf(s, sc, "%s", g_fx ? "On" : "Off"); break;
     case 3: snprintf(m, mc, "Theme"); snprintf(s, sc, "%s", ui_theme_name(g_theme)); break;
     case 4: snprintf(m, mc, "Vsync (no tearing)"); snprintf(s, sc, "%s", g_vsync ? "On" : "Off"); break;
+    case 5: snprintf(m, mc, "Group episodes of a show"); snprintf(s, sc, "%s", g_group ? "On" : "Off"); break;
+    case 6: snprintf(m, mc, "Turn off after downloads"); snprintf(s, sc, "%s", g_autooff ? "On" : "Off"); break;
     default: snprintf(m, mc, "About ArchiveTV"); *tone = 4; break;
     }
 }
@@ -2551,6 +2805,8 @@ static void settings_action(int i) {
         else scr = video_mode(g_vsync);   /* keep what worked */
         break;
     }
+    case 5: g_group = !g_group; break;
+    case 6: g_autooff = !g_autooff; g_off_armed = 0; break;
     default: screen_about(); return;
     }
     sfx(SFX_TOGGLE);
@@ -2564,7 +2820,7 @@ static int tab_count(int tab) {
     case 2: return nchan;
     case 3: return npl + 1;
     case 4: return nq + npart + ndf;
-    default: return 6;
+    default: return 8;
     }
 }
 static const char *FOOT[6] = {

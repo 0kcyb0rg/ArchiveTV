@@ -10,6 +10,8 @@ A cute little TV for your Miyoo Mini. Browse, stream and download videos from th
 - **Watch now**: starts playing after a few percent, keeps downloading as you watch
 - **Download queue** with pause, resume and partial downloads that survive Wi-Fi drops
 - **Saved** shows and searches, **playlists**, resume where you stopped
+- Episodes of a show **folded into one row**, sorting (episode order, newest, oldest...)
+- Optional **turn off when downloads finish**: queue a bunch and go to bed
 - Four themes (Night by default), scanlines, menu music and sounds
 
 ## Devices

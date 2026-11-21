@@ -22,7 +22,8 @@ HOME TABS (L1 / R1 or L2 / R2 to switch)
   Saved   - your bookmarks: shows, collections and searches (Y anywhere saves)
   Lists   - your playlists
   Files   - the download queue, paused downloads, then the videos on your card
-  (gear)  - Settings: music, menu sounds, scanlines, theme, vsync, About
+  (gear)  - Settings: music, menu sounds, scanlines, theme, vsync,
+            group episodes, turn off after downloads, About
 
 BUTTONS
   D-pad move      LEFT/RIGHT page      A open / menu      B back
@@ -33,6 +34,16 @@ BUTTONS
   MENU   turn ArchiveTV off (asks first)
   Themes: Night (default), Cute, Game Boy, Plain.
   The arrow badge in the footer (e.g. 45%) means a download is running.
+
+SHOWS AND SERIES
+  Episodes of one show are folded into a single row ("Sailor Moon  46 eps");
+  open it to see them in episode order. Turn this off in Settings.
+  In a show, X sorts its files: best quality first, or A to Z (episode order).
+  Search results: X sorts by most popular, newest, oldest or A to Z.
+
+TURN OFF AFTER DOWNLOADS (Settings, off by default)
+  Queue up a bunch of videos and when the last one is done, ArchiveTV counts
+  down 30 seconds and powers the handheld off. B keeps it on.
 
 A VIDEO (press A on a file)
   Watch now              starts playing once a little is downloaded (the bar shows where),

@@ -62,6 +62,8 @@ int *__errno_location(void);
 #define errno (*__errno_location())
 pid_t fork(void);
 int pipe(int *);
+int system(const char *);
+char *strtok(char *, const char *);
 int dup2(int, int);
 int execv(const char *, char *const[]);
 pid_t setsid(void);
@@ -263,3 +265,6 @@ void *swr_alloc_set_opts(void *, int64_t, int, int, int64_t, int, int, int, void
 int swr_init(void *);
 void swr_free(void **);
 int swr_convert(void *, uint8_t **, int, const uint8_t **, int);
+/* ASCII ctype (glibc's needs locale tables) */
+static inline int tolower(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
+static inline int isalpha(int c) { return (c | 32) >= 'a' && (c | 32) <= 'z'; }
