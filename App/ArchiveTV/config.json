@@ -1,0 +1,7 @@
+{
+  "label": "ArchiveTV",
+  "icon": "icon.png",
+  "iconsel": "",
+  "description": "Internet Archive videos (WiFi)",
+  "launch": "launch.sh"
+}
