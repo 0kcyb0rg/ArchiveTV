@@ -324,8 +324,15 @@ void ui_list(const URow *rows, int n, int sel, int top, int moff, double t, cons
     int x = 4, y = 38, w = UW - 8, h = UVIS * UROWH + 12;
     win(x, y, w, h, WHITE);
     if (!n) {
-        mascot(UW / 2 - 33, y + 46, 3, MOOD_SLEEP, t);
-        txt_center(UW / 2, y + 130, empty ? empty : "Nothing here.", DIM, 36);
+        /* sleepy TV with one or two lines under it ("\n" splits), centred in the box */
+        const char *msg = empty ? empty : "Nothing here.";
+        char l1b[80]; const char *nl = strchr(msg, '\n'), *l2 = 0;
+        if (nl) { size_t k = (size_t)(nl - msg); if (k >= sizeof l1b) k = sizeof l1b - 1; memcpy(l1b, msg, k); l1b[k] = 0; l2 = nl + 1; msg = l1b; }
+        int block = 81 + 6 + (l2 ? 26 : 13);
+        int my = y + (h - block) / 2 - 2;
+        mascot(UW / 2 - 33, my, 3, MOOD_SLEEP, t);
+        txt_center(UW / 2, my + 85, msg, DIM, 36);
+        if (l2) txt_center(UW / 2, my + 98, l2, DIM, 36);
         return;
     }
     for (int i = 0; i < UVIS && top + i < n; i++) {

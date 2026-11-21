@@ -198,7 +198,7 @@ static int ask(const char *title, const char *l1s, const char *l2s, int mood, co
         usleep(50000);
     }
 }
-static void error_box(const char *what, const char *detail) { sfx(SFX_ERROR); ask("Oops!", what, detail, MOOD_SAD, "A:OK"); }
+static void error_box(const char *what, const char *detail) { LM.on = 0; sfx(SFX_ERROR); ask("Oops!", what, detail, MOOD_SAD, "A:OK"); }
 
 /* Generic list: label(i) gives the main text, the right-hand text and a tone (0 normal, 1 good, 2 warn, 3 dim, 4 more). */
 typedef void (*LabelFn)(int i, char *main, size_t mc, char *side, size_t sc, int *tone);
@@ -211,6 +211,7 @@ static void queue_tick(void);
 static int g_quit = 0;   /* set once the user says yes to "Turn off ArchiveTV?": every screen backs out */
 static int quit_ask(void);
 static int list_loop_t(const char *title, int n, LabelFn fn, const char *footer, int *sel, const char *empty, const char **status, int tab) {
+    LM.on = 0;   /* a list is up: the loading screen is over */
     if (g_quit) return K_MENU;
     int bheld = 0; double xdown = 0, mpause = 0; double moff = 0, tlast = now_s();   /* moff = ms of title scrolling; holding X runs it faster */
     const char *theme_msg = 0; double theme_t = 0;
@@ -601,11 +602,10 @@ static char *http_get(const char *url, int *err) {
     int st = 0;
     if (cancelled || stalled || !b) kill(pid, SIGTERM);
     waitpid(pid, &st, 0);
-    LM.on = 0;
     int code = (st & 0x7f) ? -1 : ((st >> 8) & 255);
-    if (cancelled) { free(b); *err = -5; return 0; }
-    if (!b) { *err = -4; return 0; }
-    if (stalled || code != 0) { logf_("http: curl exit %d%s for %s", code, stalled ? " (stalled)" : "", url); free(b); *err = code == 127 || code == 126 ? -6 : -3; return 0; }
+    if (cancelled) { free(b); *err = -5; LM.on = 0; return 0; }
+    if (!b) { *err = -4; LM.on = 0; return 0; }
+    if (stalled || code != 0) { LM.on = 0; logf_("http: curl exit %d%s for %s", code, stalled ? " (stalled)" : "", url); free(b); *err = code == 127 || code == 126 ? -6 : -3; return 0; }
     b[len] = 0;
     logf_("http: %u bytes from %s", (unsigned)len, url);
     return b;
@@ -2112,6 +2112,7 @@ static int load_item(const char *id) {
     if (!item_title8[0]) snprintf(item_title8, sizeof item_title8, "%s", id);
     const char *fa = jget(js, "files");
     for (const char *el = fa ? jfirst(fa) : 0; el && nfiles < 400; el = jnext(el)) {
+        loading_anim();
         char name[400], fmt[64], tmp[64];
         const char *v = jget(el, "name"); if (!v) continue;
         jstr(v, name, sizeof name);
@@ -2214,6 +2215,7 @@ static int load_items(const Chan *c, int page, int sort) {
     if (nf) { jstr(nf, tmp, sizeof tmp); items_found = atoi(tmp); }
     const char *docs = jget(resp, "docs");
     for (const char *el = docs ? jfirst(docs) : 0; el && nitems < 2000; el = jnext(el)) {
+        loading_anim();
         Item *it = &items[nitems];
         const char *v = jget(el, "identifier"); if (!v) continue;
         jstr(v, it->id, sizeof it->id);
@@ -2468,7 +2470,7 @@ static void screen_playlist(const char *name) {
     const char *status = "";
     for (;;) {
         pl_load(name);
-        int k = list_loop(title, nple, lbl_plentry, "A:Play  Y:Queue all  X:Remove  B:Back", &sel, "Empty. Add videos from a show (A > Add to playlist).", &status);
+        int k = list_loop(title, nple, lbl_plentry, "A:Play  Y:Queue all  X:Remove  B:Back", &sel, "Empty playlist.\nAdd videos from any show.", &status);
         if (k == K_START) k = K_A;
         if (k == K_B || k == K_MENU) return;
         if (k == K_X && nple) {
@@ -2554,7 +2556,7 @@ static const char *FOOT[6] = {
     "A:Menu  START:Play  L/R:Tab",
     "A:Change  L/R:Tab",
 };
-static const char *EMPTY[6] = { 0, "No guide.txt found.", "Press Y on any show or collection to save it here.", 0, "Nothing yet. Downloads show up here.", 0 };
+static const char *EMPTY[6] = { 0, "No guide.txt found.", "Nothing saved yet.\nPress Y on a show to save it.", 0, "Nothing yet.\nDownloads show up here.", 0 };
 static LabelFn TABFN[6] = { lbl_tab_search, lbl_tab_guide, lbl_tab_saved, lbl_tab_lists, lbl_tab_files, lbl_tab_settings };
 
 static void home(void) {
