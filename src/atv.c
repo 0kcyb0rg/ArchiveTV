@@ -23,7 +23,14 @@ static void logf_(const char *fmt, ...) {
     va_list ap; va_start(ap, fmt); vfprintf(LOG, fmt, ap); va_end(ap);
     fputs("\n", LOG); fflush(LOG);
 }
-static double now_s(void) { struct timeval tv; gettimeofday(&tv, 0); return tv.tv_sec + tv.tv_usec / 1e6; }
+/* seconds since the app started. (Counting from 1970 made the drawing code's (int)(t * 12) overflow
+   on the device, which froze every animation: the TV's blink, the static, the stripes, the bouncing.) */
+static double now_s(void) {
+    static long t0 = 0;
+    struct timeval tv; gettimeofday(&tv, 0);
+    if (!t0) t0 = tv.tv_sec - 1;
+    return (double)(tv.tv_sec - t0) + tv.tv_usec / 1e6;
+}
 
 /* ======================= drawing ======================= */
 static SDL_Surface *scr;
