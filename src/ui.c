@@ -234,8 +234,7 @@ void ui_header(const char *title, const char *right, double t, int mood) {
     for (int i = 0; i < 7; i++) { int x0 = i * UW / 7, x1 = (i + 1) * UW / 7; R(x0, 0, x1 - x0, 4, TH->bars[i]); }
     R(0, 4, UW, 1, NAVY);
     win(4, 9, UW - 8, 26, CREAM);
-    int bob = ((int)(t * 3) & 1);
-    mascot(10, 7 + bob, 1, mood, t);
+    mascot(10, 7, 1, mood, 1.0);   /* the little header TV stays still (fixed time: no blink, no bounce) */
     int rw = right && *right ? txtw(right, 16) + 10 : 0;
     txt_pop(40, 14, title, TEXT, YELLOWL, (UW - 52 - rw - 8) / 8);
     if (rw) {
@@ -429,7 +428,7 @@ double ui_osd_avail = -1;   /* streaming: fraction of the video downloaded so fa
 void ui_osd(uint32_t *buf, const char *title, double pos, double dur, int paused, const char *clock, double t) {
     B = buf;
     win(4, 4, txtw(title, 26) + 44, 26, CREAM);
-    mascot(11, 3 + ((int)(t * 3) & 1), 1, paused ? MOOD_SLEEP : MOOD_HAPPY, t);
+    mascot(11, 3, 1, paused ? MOOD_SLEEP : MOOD_HAPPY, 1.0);   /* still, like the header one */
     txt(40, 9, title, TEXT, 26);
     if (clock) { pill(UW - 54, 8, 48, 16, NAVY); txt(UW - 50, 8, clock, MINT, 5); }
     /* bottom: a soft dark fade with a thin bar, like a normal video player */
