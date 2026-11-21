@@ -14,7 +14,7 @@ export LD_LIBRARY_PATH="$APPDIR/libs:/mnt/SDCARD/miyoo/lib:/config/lib:/customer
 if [ "$(date +%Y)" -lt 2025 ]; then VERIFY=0; fi
 echo "System year: $(date +%Y) - TLS verification: $VERIFY" >> "$LOG"
 export VERIFY
-chmod +x "$APPDIR/archivetv" 2>/dev/null
+chmod +x "$APPDIR/archivetv" "$APPDIR/bin/curl" 2>/dev/null
 
 GOVF=/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
 GOV=$(cat "$GOVF" 2>/dev/null)

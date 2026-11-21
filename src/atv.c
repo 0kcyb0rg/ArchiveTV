@@ -550,9 +550,12 @@ static void urlenc(char *d, size_t cap, const char *s, int keep_slash) {
 static const char *curl_bin(void) {
     static const char *found = 0;
     if (found) return found;
-    static const char *C[] = { "/mnt/SDCARD/.tmp_update/bin/curl", "/mnt/SDCARD/spruce/bin/curl", "/usr/bin/curl", "/bin/curl" };
-    for (int i = 0; i < 4; i++) if (access(C[i], X_OK) == 0 || access(C[i], F_OK) == 0) { found = C[i]; break; }
+    static char mine[720];   /* our own static curl in App/ArchiveTV/bin, for systems without one (sprigUI) */
+    snprintf(mine, sizeof mine, "%s/bin/curl", appdir);
+    const char *C[] = { "/mnt/SDCARD/.tmp_update/bin/curl", "/mnt/SDCARD/spruce/bin/curl", mine, "/usr/bin/curl", "/bin/curl" };
+    for (int i = 0; i < 5; i++) if (access(C[i], F_OK) == 0) { found = C[i]; break; }
     if (!found) found = C[0];
+    if (found == mine) chmod(mine, 0755);
     logf_("curl: %s", found);
     return found;
 }
@@ -1765,7 +1768,7 @@ static void queue_badge(char *b, size_t cap) {
 static void net_error(int err) {
     if (err == -5) return;   /* the user pressed B while it was loading */
     if (!has_wifi) { error_box("No Wi-Fi on this Miyoo.", "Copy videos into App/ArchiveTV/videos"); return; }
-    if (err == -6) error_box("curl is missing.", "(needs Onion OS 4.2+ or spruceOS)");
+    if (err == -6) error_box("curl is missing.", "(App/ArchiveTV/bin/curl)");
     else error_box("Network error. Is Wi-Fi on?", "(details in log.txt)");
 }
 typedef struct { char dst[900]; char url[2200]; char disp[200]; long long have, total; } PartF;

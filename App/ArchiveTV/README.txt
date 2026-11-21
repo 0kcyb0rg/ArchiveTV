@@ -8,7 +8,7 @@ DEVICES (one build for all of them)
   Wi-Fi models (Mini Plus, Mini Flip) can browse and download.
   Models without Wi-Fi play videos you copy into App/ArchiveTV/videos from a computer.
   Works on Onion OS 4.2+, and (beta, untested) on spruceOS and sprigUI.
-  It uses the curl that comes with the system and brings its own FFmpeg (libs/).
+  It brings its own FFmpeg (libs/), and its own curl (bin/) for systems that have none.
   If the picture is upside down on your model, set ROTATE=0 in launch.sh.
 
 INSTALL
@@ -77,6 +77,6 @@ CREDITS
   Menu sounds by @0kCyb0rg
   Font: m5x7 by Daniel Linssen (managore.itch.io/m5x7)
   Video playback: FFmpeg 2.4 (ffmpeg.org), LGPL, see licenses/
-  Downloads: curl (curl.se), as shipped with Onion OS / spruceOS
+  Downloads: curl (curl.se); bin/curl is a static curl + OpenSSL build, see licenses/
   CA certificates: Mozilla, via curl (MPL 2.0, see licenses/)
   Videos: Internet Archive - please donate at archive.org/donate

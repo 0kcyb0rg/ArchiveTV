@@ -63,6 +63,7 @@ int *__errno_location(void);
 pid_t fork(void);
 int pipe(int *);
 int system(const char *);
+int chmod(const char *, unsigned);
 char *strtok(char *, const char *);
 int dup2(int, int);
 int execv(const char *, char *const[]);

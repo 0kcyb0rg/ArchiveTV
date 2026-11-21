@@ -62,6 +62,8 @@ mkdir -p libs && cp App/ArchiveTV/libs/* libs/    # build.sh links against these
 sh build.sh                                       # -> build/archivetv
 cp build/archivetv App/ArchiveTV/
 ```
+For systems without curl (sprigUI) the release zip also carries a static curl in `App/ArchiveTV/bin`
+(the same build spruceOS ships in `spruce/bin/curl`).
 The toolchain is the [pre-built Miyoo Mini toolchain](https://github.com/shauninman/miyoomini-toolchain-buildroot/releases).
 
 ## Credits
