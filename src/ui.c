@@ -229,12 +229,14 @@ void ui_bg(double t) {
             if (!odd) { P(cx + 7, cy + 7, BG1); P(cx + 8, cy + 8, BG1); }
         }
 }
+static int header_still = 0;
 void ui_header(const char *title, const char *right, double t, int mood) {
     B = T;
     for (int i = 0; i < 7; i++) { int x0 = i * UW / 7, x1 = (i + 1) * UW / 7; R(x0, 0, x1 - x0, 4, TH->bars[i]); }
     R(0, 4, UW, 1, NAVY);
     win(4, 9, UW - 8, 26, CREAM);
-    mascot(10, 7, 1, mood, 1.0);   /* the little header TV stays still (fixed time: no blink, no bounce) */
+    if (header_still) mascot(10, 7, 1, mood, 1.0);   /* still on the download screen (fixed time: no blink, no bounce) */
+    else mascot(10, 7 + ((int)(t * 3) & 1), 1, mood, t);   /* dances on the menus */
     int rw = right && *right ? txtw(right, 16) + 10 : 0;
     txt_pop(40, 14, title, TEXT, YELLOWL, (UW - 52 - rw - 8) / 8);
     if (rw) {
@@ -389,7 +391,7 @@ static void fmt_sz(char *d, int cap, long long b) {
 double ui_play_at = 0;   /* watch-now: fraction of the file needed before it starts playing (0 = none) */
 void ui_download(const char *name, long long got, long long total, double rate, const char *eta, int cancelling, double t, const char *hints) {
     ui_bg(t);
-    ui_header("Downloading", "", t, MOOD_WOW);
+    header_still = 1; ui_header("Downloading", "", t, MOOD_WOW); header_still = 0;
     B = T;
     win(16, 44 + OY, UW - 32, 160, WHITE);
     mascot(36, 58 + OY + ((int)(t * 4) & 1), 2, total > 0 && got >= total ? MOOD_HAPPY : MOOD_WOW, t);
