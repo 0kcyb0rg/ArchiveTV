@@ -36,7 +36,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     final double t0 = System.nanoTime() / 1e9;
     SharedPreferences prefs;
     int theme = 0; boolean music = true, sounds = true, group = true;
-    SoundPool pool; int sMove, sSelect, sBack, sTab, sError; MediaPlayer bgm;
+    SoundPool pool; int sMove, sSelect, sBack, sTab, sError, sDone; final MusicLoop bgm = new MusicLoop();
 
     double now() { return System.nanoTime() / 1e9 - t0; }
 
@@ -55,28 +55,20 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         try {
             sMove = pool.load(getAssets().openFd("sfx/move.wav"), 1); sSelect = pool.load(getAssets().openFd("sfx/select.wav"), 1);
             sBack = pool.load(getAssets().openFd("sfx/back.wav"), 1); sTab = pool.load(getAssets().openFd("sfx/tab.wav"), 1);
-            sError = pool.load(getAssets().openFd("sfx/error.wav"), 1);
+            sError = pool.load(getAssets().openFd("sfx/error.wav"), 1); sDone = pool.load(getAssets().openFd("sfx/done.wav"), 1);
         } catch (Exception ignored) { }
+        Store.init(this); Downloader.load(); Downloader.kick();
         stack.push(new Hello());
     }
 
     void save() { prefs.edit().putInt("theme", theme).putBoolean("music", music).putBoolean("sounds", sounds).putBoolean("group", group).putBoolean("swapab", Keys.swapAB).apply(); }
     void sfx(int id) { if (sounds && id != 0) pool.play(id, 0.55f, 0.55f, 1, 0, 1f); }
 
-    void musicOn(boolean on) {
-        if (on && music) {
-            if (bgm == null) try {
-                bgm = new MediaPlayer();
-                android.content.res.AssetFileDescriptor fd = getAssets().openFd("music.ogg");
-                bgm.setDataSource(fd.getFileDescriptor(), fd.getStartOffset(), fd.getLength());
-                bgm.setLooping(true); bgm.setVolume(0.45f, 0.45f); bgm.prepare();
-            } catch (Exception e) { bgm = null; }
-            if (bgm != null && !bgm.isPlaying()) bgm.start();
-        } else if (bgm != null && bgm.isPlaying()) bgm.pause();
-    }
+    void musicOn(boolean on) { if (on && music) bgm.start(this); else bgm.pause(); }
 
     @Override protected void onResume() { super.onResume(); hideBars(); musicOn(true); }
     @Override protected void onPause() { super.onPause(); musicOn(false); }
+    @Override protected void onDestroy() { super.onDestroy(); bgm.stop(); }
     void hideBars() {
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_FULLSCREEN
                 | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
@@ -143,11 +135,18 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     void pop() { stack.pop(); }
     void runBg(Runnable r) { new Thread(r, "net").start(); }
 
-    void play(String url, String title) {
+    /** plays the downloaded copy if there is one, otherwise streams from archive.org */
+    void play(String id, String name, String title) {
+        java.io.File f = Store.local(id, name);
+        playSrc(f.exists() ? f.getPath() : Archive.downloadUrl(id, name), title, id + "/" + name);
+    }
+    void playSrc(String src, String title, String key) {
         Intent i = new Intent(this, PlayerActivity.class);
-        i.putExtra("url", url); i.putExtra("title", title);
+        i.putExtra("url", src); i.putExtra("title", title); i.putExtra("key", key);
         startActivity(i);
     }
+    /** the download % in the footer, like the Miyoo's arrow badge */
+    void badge() { String b = Downloader.badge(); if (b != null) Native.footerBadge(b); }
 
     // ---------------- screens ----------------
     abstract static class Screen { abstract void draw(double t); abstract void key(int k); }
@@ -194,23 +193,59 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     }
 
     // --- the home tabs ---
-    static final String[] TABS = { "Search", "Guide", "\u0001" };
+    static final String[] TABS = { "Search", "Guide", "Saved", "Lists", "Files", "\u0001" };
     class Tabs extends ListScreen {
         int tab = 1; Guide.Node node;
+        List<String[]> saved = new ArrayList<>(); List<String> pls = new ArrayList<>();
+        List<Downloader.Job> jobs = new ArrayList<>(); List<java.io.File> vids = new ArrayList<>(), parts = new ArrayList<>();
+        double lastFill = 0;
         Tabs() { node = Guide.load(MainActivity.this); fill(); }
         void fill() {
-            clear();
-            if (tab == 0) { row("Search videos...", "", 4); row("Search collections...", "", 4); }
-            else if (tab == 1) { for (Guide.Node c : node.kids) row(c.name, c.isFolder() ? "" + c.kids.size() : "", c.isFolder() ? 4 : 0); }
-            else {
-                row("Music", music ? "On" : "Off", 0); row("Menu sounds", sounds ? "On" : "Off", 0);
-                row("Theme", Native.themeName(theme), 0); row("Group episodes of a show", group ? "On" : "Off", 0);
-                row("Swap A and B", Keys.swapAB ? "On" : "Off", 0); row("About ArchiveTV", "", 4);
+            clear(); lastFill = now();
+            switch (tab) {
+                case 0: row("Search videos...", "", 4); row("Search collections...", "", 4); empty = ""; break;
+                case 1: for (Guide.Node c : node.kids) row(c.name, c.isFolder() ? "" + c.kids.size() : "", c.isFolder() ? 4 : 0); empty = "No guide."; break;
+                case 2:
+                    saved = Store.saved();
+                    for (String[] r : saved) row(r.length > 2 ? r[2] : r[1], r[0].equals("item") ? "" : r[0].endsWith("search") ? "search" : "folder", r[0].equals("item") ? 0 : 4);
+                    empty = "Nothing saved yet.\nPress Y on a show to save it."; break;
+                case 3:
+                    pls = Store.playlistNames(); row("+ New playlist", "", 4);
+                    for (String n : pls) row(n, "" + Store.playlist(n).size(), 0);
+                    empty = ""; break;
+                case 4: fillFiles(); empty = "Nothing yet.\nDownloads show up here."; break;
+                default:
+                    row("Music", music ? "On" : "Off", 0); row("Menu sounds", sounds ? "On" : "Off", 0);
+                    row("Theme", Native.themeName(theme), 0); row("Group episodes of a show", group ? "On" : "Off", 0);
+                    row("Swap A and B", Keys.swapAB ? "On" : "Off", 0); row("About ArchiveTV", "", 4); empty = "";
             }
         }
+        void fillFiles() {
+            synchronized (Downloader.class) { jobs = new ArrayList<>(Downloader.queue); }
+            vids.clear(); parts.clear();
+            java.io.File[] fs = Store.videos.listFiles();
+            if (fs != null) {
+                java.util.Arrays.sort(fs, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+                for (java.io.File f : fs) {
+                    String n = f.getName();
+                    if (n.endsWith(".part")) { String d = f.getPath().substring(0, f.getPath().length() - 5); if (Downloader.find(d) == null) parts.add(f); }
+                    else if (Archive.isVideo(n)) vids.add(f);
+                }
+            }
+            for (Downloader.Job jb : jobs) {
+                String st;
+                if (Downloader.active == jb) st = jb.total > 0 ? (100 * jb.got / jb.total) + "%" : "starting";
+                else st = jb.state == 1 ? "failed" : jb.state == 2 ? "paused " + Archive.size(jb.got) : "queued";
+                row(jb.disp, st, Downloader.active == jb ? 1 : jb.state == 1 ? 2 : 3);
+            }
+            for (java.io.File f : parts) row(Store.disp(new java.io.File(f.getPath().substring(0, f.getPath().length() - 5))), "paused " + Archive.size(f.length()), 3);
+            for (java.io.File f : vids) row(Store.disp(f), Archive.size(f.length()), 0);
+        }
         void draw(double t) {
+            if (tab == 4 && t - lastFill > 1) { int o = sel; fill(); sel = o; }
             Native.bg(t); Native.headerTabs(TABS, tab, null, t); drawList(t);
-            Native.footer(tab == 2 ? "A:Change  L/R:Tab  B:Quit" : "A:Open  L/R:Tab  B:Quit");
+            String[] F = { "A:Open  L/R:Tab", "A:Open  L/R:Tab", "A:Open  X:Remove  L/R:Tab", "A:Open  X:Delete  L/R:Tab", "A:Menu  START:Play  L/R:Tab", "A:Change  L/R:Tab" };
+            Native.footer(F[tab]); badge();
         }
         void key(int k) {
             if (move(k)) return;
@@ -218,23 +253,139 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                 tab = (tab + ((k == Keys.L1 || k == Keys.L2) ? TABS.length - 1 : 1)) % TABS.length; sel = 0; top = 0; selT = now(); sfx(sTab); fill(); return;
             }
             if (k == Keys.SELECT) { theme = (theme + 1) % Native.themeCount(); Native.setTheme(theme); save(); say("Theme: " + Native.themeName(theme)); fill(); return; }
-            if (k == Keys.B || k == Keys.MENU) { sfx(sBack); push(new Confirm()); return; }
+            if (k == Keys.MENU || k == Keys.B) { sfx(sBack); push(new Confirm()); return; }
+            if (k == Keys.X) { removeAt(); return; }
             if (k != Keys.A && k != Keys.START) return;
+            if (m.isEmpty()) return;
             sfx(sSelect);
-            if (tab == 0) push(new Keyboard(sel == 0 ? "search" : "csearch"));
-            else if (tab == 1) { if (m.isEmpty()) return; Guide.Node c = node.kids.get(sel); if (c.isFolder()) push(new Folder(c)); else open(c.kind, c.arg, c.name); }
-            else {
-                switch (sel) {
-                    case 0: music = !music; musicOn(true); if (!music && bgm != null) bgm.pause(); break;
-                    case 1: sounds = !sounds; break;
-                    case 2: theme = (theme + 1) % Native.themeCount(); Native.setTheme(theme); break;
-                    case 3: group = !group; break;
-                    case 4: Keys.swapAB = !Keys.swapAB; break;
-                    default: push(new About()); return;
-                }
-                save(); fill();
+            switch (tab) {
+                case 0: push(new Keyboard(sel == 0 ? "Search videos" : "Search collections", "SEARCH", q -> { pop(); push(new Results(sel == 0 ? "search" : "csearch", q, q)); })); break;
+                case 1: { Guide.Node c = node.kids.get(sel); if (c.isFolder()) push(new Folder(c)); else open(c.kind, c.arg, c.name); break; }
+                case 2: { String[] r = saved.get(sel); open(r[0], r[1], r.length > 2 ? r[2] : r[1]); break; }
+                case 3:
+                    if (sel == 0) push(new Keyboard("New playlist", "CREATE", n -> { pop(); java.io.File f = Store.plFile(n); try { f.createNewFile(); } catch (Exception ignored) { } fill(); }));
+                    else push(new PlaylistScreen(pls.get(sel - 1)));
+                    break;
+                case 4: filesAct(k); break;
+                default:
+                    switch (sel) {
+                        case 0: music = !music; musicOn(true); break;
+                        case 1: sounds = !sounds; break;
+                        case 2: theme = (theme + 1) % Native.themeCount(); Native.setTheme(theme); break;
+                        case 3: group = !group; break;
+                        case 4: Keys.swapAB = !Keys.swapAB; break;
+                        default: push(new About()); return;
+                    }
+                    save(); fill();
             }
         }
+        void removeAt() {
+            if (m.isEmpty()) return;
+            if (tab == 2) { String name = m.get(sel); push(new Ask("Remove?", "Remove from Saved?", name, "A:Remove  B:Keep", () -> { Store.unsave(sel); fill(); say("Removed."); })); }
+            else if (tab == 3 && sel > 0) { String n = pls.get(sel - 1); push(new Ask("Delete?", "Delete this playlist?", n, "A:Delete  B:Keep", () -> { Store.plFile(n).delete(); fill(); say("Playlist deleted."); })); }
+            else if (tab == 4) filesAct(Keys.X);
+        }
+        void filesAct(int k) {
+            int i = sel;
+            if (i < jobs.size()) {
+                Downloader.Job jb = jobs.get(i);
+                String id = jb.dst.substring(jb.dst.lastIndexOf('/') + 1);
+                if (k == Keys.START) { playSrc(jb.url, jb.disp, keyFor(jb.dst)); return; }
+                if (k == Keys.X) { push(new Ask("Delete?", "Stop and delete this download?", jb.disp, "A:Delete  B:Keep", () -> { Downloader.remove(jb, true); fill(); say("Download deleted."); })); return; }
+                String[] o = { "Watch now", jb.state == 1 ? "Try again" : jb.state == 2 ? "Resume download" : "Pause download", "Delete download", "Back" };
+                push(new Menu(jb.disp, o, c -> {
+                    if (c == 0) playSrc(jb.url, jb.disp, keyFor(jb.dst));
+                    else if (c == 1) { Downloader.pause(jb, jb.state == 0); say(jb.state == 2 ? "Paused. Resume it any time." : "Resuming..."); }
+                    else if (c == 2) Downloader.remove(jb, true);
+                    fill();
+                }));
+                return;
+            }
+            i -= jobs.size();
+            if (i < parts.size()) {
+                java.io.File pf = parts.get(i);
+                String[] o = { "Delete download", "Back" };
+                push(new Menu(Store.disp(pf), o, c -> { if (c == 0) { pf.delete(); fill(); } }));
+                return;
+            }
+            i -= parts.size();
+            if (i < vids.size()) {
+                java.io.File f = vids.get(i);
+                if (k == Keys.START) { playSrc(f.getPath(), Store.disp(f), keyFor(f.getPath())); return; }
+                if (k == Keys.X) { push(new Ask("Delete?", "Delete this video?", Store.disp(f), "A:Delete  B:Keep", () -> { f.delete(); fill(); say("Deleted."); })); return; }
+                String[] o = { "Play", "Add to playlist...", "Delete", "Back" };
+                push(new Menu(Store.disp(f), o, c -> {
+                    String n = f.getName(); int sp = n.indexOf("__");
+                    if (c == 0) playSrc(f.getPath(), Store.disp(f), keyFor(f.getPath()));
+                    else if (c == 1 && sp > 0) choosePlaylist(n.substring(0, sp), n.substring(sp + 2), Store.disp(f));
+                    else if (c == 2) { f.delete(); fill(); }
+                }));
+            }
+        }
+    }
+    /** the resume key for a downloaded file: "<id>/<file name>", the same as when streaming */
+    static String keyFor(String path) { String n = new java.io.File(path).getName(); int i = n.indexOf("__"); return i > 0 ? n.substring(0, i) + "/" + n.substring(i + 2) : n; }
+
+    void choosePlaylist(String id, String name, String title) {
+        List<String> pls = Store.playlistNames();
+        String[] o = new String[Math.min(pls.size(), 12) + 2];
+        o[0] = "+ New playlist"; for (int i = 0; i < o.length - 2; i++) o[i + 1] = pls.get(i); o[o.length - 1] = "Back";
+        push(new Menu("Add to playlist", o, c -> {
+            if (c == 0) push(new Keyboard("New playlist", "CREATE", n -> { pop(); Store.plAdd(n, id, name, title); toastLater("Added to " + n + "!"); }));
+            else if (c < o.length - 1) { boolean ok = Store.plAdd(o[c], id, name, title); toastLater(ok ? "Added to " + o[c] + "!" : "Already in " + o[c]); }
+        }));
+    }
+    void toastLater(String msg) { Screen s = stack.peek(); if (s instanceof ListScreen) ((ListScreen) s).say(msg); }
+
+    /** the A-button menu on a video of an item */
+    void fileMenu(String id, Archive.VFile v, int k) {
+        java.io.File f = Store.local(id, v.name);
+        if (k == Keys.START) { play(id, v.name, v.disp); return; }
+        Downloader.Job jb = Downloader.find(f.getPath());
+        String[] o = f.exists() ? new String[] { "Watch", "Add to playlist...", "Delete from device", "Back" }
+                : new String[] { "Watch now", jb != null ? "Already in queue" : "Download", "Add to playlist...", "Back" };
+        push(new Menu(v.disp, o, c -> {
+            String a = o[c];
+            if (a.startsWith("Watch")) play(id, v.name, v.disp);
+            else if (a.equals("Download")) { int r = Downloader.add(Archive.downloadUrl(id, v.name), f, v.disp); toastLater(r == 0 ? "Added to the queue (see Files tab)" : "Already in the queue"); }
+            else if (a.startsWith("Add to playlist")) choosePlaylist(id, v.name, v.disp);
+            else if (a.startsWith("Delete")) { f.delete(); toastLater("Deleted."); }
+        }));
+    }
+
+    class PlaylistScreen extends ListScreen {
+        final String name; List<String[]> items;
+        PlaylistScreen(String n) { name = n; empty = "Empty playlist.\nAdd videos from any show."; fill(); }
+        void fill() { clear(); items = Store.playlist(name); for (String[] r : items) row(r.length > 2 ? r[2] : r[1], Store.local(r[0], r[1]).exists() ? "on device" : "", Store.local(r[0], r[1]).exists() ? 1 : 0); }
+        void draw(double t) { Native.bg(t); Native.header(name, null, t, Native.HAPPY); drawList(t); Native.footer("A:Play  X:Remove  B:Back"); badge(); }
+        void key(int k) {
+            if (move(k)) return;
+            if (k == Keys.B) { sfx(sBack); pop(); return; }
+            if (m.isEmpty()) return;
+            String[] r = items.get(sel);
+            if (k == Keys.X) { Store.plRemove(name, sel); fill(); say("Removed."); return; }
+            if (k == Keys.A || k == Keys.START) { sfx(sSelect); play(r[0], r[1], r.length > 2 ? r[2] : r[1]); }
+        }
+    }
+
+    interface Pick { void picked(int i); }
+    interface Text { void done(String s); }
+    class Menu extends Screen {
+        final String title; final String[] items; final Pick cb; int sel = 0;
+        Menu(String title, String[] items, Pick cb) { this.title = title; this.items = items; this.cb = cb; }
+        void draw(double t) { Screen under = stack.size() > 1 ? new ArrayList<>(stack).get(1) : null; if (under != null) under.draw(t); Native.menu(title, items, sel, t); }
+        void key(int k) {
+            if (k == Keys.UP) { sel = (sel + items.length - 1) % items.length; sfx(sMove); }
+            else if (k == Keys.DOWN) { sel = (sel + 1) % items.length; sfx(sMove); }
+            else if (k == Keys.B) { sfx(sBack); pop(); }
+            else if (k == Keys.A || k == Keys.START) { sfx(sSelect); pop(); if (!items[sel].equals("Back")) cb.picked(sel); }
+        }
+    }
+    class Ask extends Screen {
+        final String title, l1, l2, hints; final Runnable yes;
+        Ask(String title, String l1, String l2, String hints, Runnable yes) { this.title = title; this.l1 = l1; this.l2 = l2; this.hints = hints; this.yes = yes; }
+        void draw(double t) { Native.message(title, l1, l2, Native.SAD, hints, t); }
+        void key(int k) { if (k == Keys.A) { pop(); yes.run(); } else if (k == Keys.B) { sfx(sBack); pop(); } }
     }
 
     void open(String kind, String arg, String title) { if (kind.equals("item")) push(new ItemScreen(arg, title)); else push(new Results(kind, arg, title)); }
@@ -297,12 +448,17 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         }
         void draw(double t) {
             if (drawLoading(t)) return;
-            Native.bg(t); Native.header(title, null, t, Native.HAPPY); drawList(t); Native.footer("A:Open  X:Sort  B:Back");
+            Native.bg(t); Native.header(title, null, t, Native.HAPPY); drawList(t); Native.footer("A:Open  Y:Save  X:Sort  B:Back"); badge();
         }
         void key(int k) {
             if (keyLoading(k) || move(k)) return;
             if (k == Keys.B) { sfx(sBack); pop(); return; }
             if (k == Keys.X) { sort = (sort + 1) % Archive.SORTS.length; page = 1; sel = 0; top = 0; say(Archive.SORT_NAMES[sort]); load(); return; }
+            if (k == Keys.Y) {
+                if (sel < fold.rows.size() && fold.rows.get(sel) >= 0) { Archive.Item it = items.get(fold.rows.get(sel)); say(Store.save(it.coll ? "collection" : "item", it.id, it.title) ? "Saved!" : "Already saved"); }
+                else say(Store.save(kind, arg, title) ? "Saved!" : "Already saved");
+                return;
+            }
             if ((k != Keys.A && k != Keys.START) || m.isEmpty()) return;
             sfx(sSelect);
             if (sel >= fold.rows.size()) { page++; load(); return; }
@@ -345,35 +501,36 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         }
         void draw(double t) {
             if (drawLoading(t)) return;
-            Native.bg(t); Native.header(title, null, t, Native.HAPPY); drawList(t); Native.footer("A:Watch  X:Sort  B:Back");
+            Native.bg(t); Native.header(title, null, t, Native.HAPPY); drawList(t); Native.footer("A:Menu  X:Sort  Y:Save  B:Back"); badge();
         }
         void key(int k) {
             if (keyLoading(k) || move(k)) return;
             if (k == Keys.B) { sfx(sBack); pop(); return; }
             if (k == Keys.X) { az = !az; rebuild(); sel = 0; top = 0; say(az ? "Sorted: A to Z (episode order)" : "Sorted: best quality first"); return; }
+            if (k == Keys.Y) { say(Store.save("item", id, title) ? "Saved!" : "Already saved"); return; }
             if ((k != Keys.A && k != Keys.START) || m.isEmpty()) return;
             sfx(sSelect);
             int r = fold.rows.get(sel);
-            if (r >= 0) { Archive.VFile v = files.get(r); play(Archive.downloadUrl(id, v.name), v.disp); }
+            if (r >= 0) fileMenu(id, files.get(r), k);
             else { int g = -r - 1; push(new Episodes(this, fold.names.get(g), fold.groups.get(g))); }
         }
     }
     class Episodes extends ListScreen {
         final ItemScreen it; final String title; final List<Integer> mem;
         Episodes(ItemScreen it, String title, List<Integer> mem) { this.it = it; this.title = title; this.mem = mem; for (int i : mem) { Archive.VFile v = it.files.get(i); row(v.disp, Archive.size(v.size), v.rank == 0 ? 1 : 0); } }
-        void draw(double t) { Native.bg(t); Native.header(title, null, t, Native.HAPPY); drawList(t); Native.footer("A:Watch  B:Back"); }
+        void draw(double t) { Native.bg(t); Native.header(title, null, t, Native.HAPPY); drawList(t); Native.footer("A:Menu  START:Watch  B:Back"); badge(); }
         void key(int k) {
             if (move(k)) return;
             if (k == Keys.B) { sfx(sBack); pop(); return; }
-            if ((k == Keys.A || k == Keys.START) && !m.isEmpty()) { sfx(sSelect); Archive.VFile v = it.files.get(mem.get(sel)); play(Archive.downloadUrl(it.id, v.name), v.disp); }
+            if ((k == Keys.A || k == Keys.START) && !m.isEmpty()) { sfx(sSelect); fileMenu(it.id, it.files.get(mem.get(sel)), k); }
         }
     }
 
     /** the on-screen keyboard from the Miyoo app */
     class Keyboard extends Screen {
-        final String kind; StringBuilder text = new StringBuilder(); int kx = 0, ky = 0; boolean caps = false;
-        Keyboard(String kind) { this.kind = kind; }
-        void draw(double t) { Native.keyboard(kind.equals("search") ? "Search videos" : "Search collections", text.toString(), kx, ky, t, "SEARCH", caps ? 1 : 0); }
+        final String title, action; final Text cb; StringBuilder text = new StringBuilder(); int kx = 0, ky = 0; boolean caps = false;
+        Keyboard(String title, String action, Text cb) { this.title = title; this.action = action; this.cb = cb; }
+        void draw(double t) { Native.keyboard(title, text.toString(), kx, ky, t, action, caps ? 1 : 0); }
         void key(int k) {
             /* ui.c lays the keys out 10 wide by 4 rows, plus a row of special keys (ky == 4) */
             switch (k) {
@@ -396,7 +553,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                     if (ch > 0 && text.length() < 60) { char c = (char) ch; text.append(caps ? Character.toUpperCase(c) : c); sfx(sSelect); }
             }
         }
-        void submit() { String q = text.toString().trim(); if (q.isEmpty()) return; sfx(sSelect); pop(); push(new Results(kind, q, q)); }
+        void submit() { String q = text.toString().trim(); if (q.isEmpty()) return; sfx(sSelect); cb.done(q); }
     }
 
     static final class Guide {

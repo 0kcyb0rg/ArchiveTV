@@ -24,4 +24,7 @@ final class Native {
     static native int kbSpecial(int kx);
     static native void about(double t);
     static native void frame(int[] out);
+    static native void osd(int[] out, String title, double pos, double dur, int paused, String clock, double avail, double t);
+    static native int width();
+    static native int height();
 }

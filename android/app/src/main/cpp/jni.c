@@ -36,7 +36,8 @@ JNIEXPORT void FN(headerTabs)(JNIEnv *e, jclass c, jobjectArray tabs, jint sel, 
     for (int i = 0; i < n; i++) v[i] = l1(e, (jstring)(*e)->GetObjectArrayElement(e, tabs, i));
     char *r = l1(e, right);
     ui_header_tabs((const char *const *)v, n, sel, r, t);
-    for (int i = 0; i < n; i++) free(v[i]); free(r);
+    for (int i = 0; i < n; i++) free(v[i]);
+    free(r);
 }
 JNIEXPORT void FN(list)(JNIEnv *e, jclass c, jobjectArray mains, jobjectArray sides, jintArray tones, jint sel, jint top, jint marquee, jdouble t, jstring empty) {
     int n = mains ? (*e)->GetArrayLength(e, mains) : 0;
@@ -69,7 +70,8 @@ JNIEXPORT void FN(menu)(JNIEnv *e, jclass c, jstring title, jobjectArray items, 
     for (int i = 0; i < n; i++) v[i] = l1(e, (jstring)(*e)->GetObjectArrayElement(e, items, i));
     char *ti = l1(e, title);
     ui_menu(ti ? ti : "", (const char *const *)v, n, sel, t);
-    for (int i = 0; i < n; i++) free(v[i]); free(ti);
+    for (int i = 0; i < n; i++) free(v[i]);
+    free(ti);
 }
 JNIEXPORT void FN(keyboard)(JNIEnv *e, jclass c, jstring title, jstring text, jint kx, jint ky, jdouble t, jstring action, jint caps) {
     char *a = l1(e, title), *b = l1(e, text), *d = l1(e, action);
@@ -85,3 +87,29 @@ JNIEXPORT void FN(frame)(JNIEnv *e, jclass c, jintArray out) {
     for (int i = 0; i < n; i++) o[i] = (jint)(buf[i] | 0xFF000000u);
     (*e)->ReleaseIntArrayElements(e, out, o, 0);
 }
+
+/* the player's time bar over the video: drawn on an empty picture, empty pixels see-through,
+   and the bottom gets the soft dark fade the Miyoo version paints over the video */
+JNIEXPORT void FN(osd)(JNIEnv *e, jclass c, jintArray out, jstring title, jdouble pos, jdouble dur, jint paused, jstring clock, jdouble avail, jdouble t) {
+    uint32_t *tmp = (uint32_t *)calloc((size_t)W * H, 4);
+    if (!tmp) return;
+    char *a = l1(e, title), *ck = l1(e, clock);
+    ui_osd_avail = avail;
+    ui_osd(tmp, a ? a : "", pos, dur, paused, ck, t);
+    ui_osd_avail = -1;
+    free(a); free(ck);
+    jint *o = (*e)->GetIntArrayElements(e, out, 0);
+    int fade0 = (H / 2 - 30) * 2;
+    for (int y = 0; y < H; y++) {
+        uint32_t al = 0;
+        if (y >= fade0) { int k = y - fade0; al = (uint32_t)((k < 24 ? k * 6 : 150) * 255 / 256); }
+        for (int x = 0; x < W; x++) {
+            uint32_t v = tmp[y * W + x];
+            o[y * W + x] = (jint)(v ? (v | 0xFF000000u) : (al << 24));
+        }
+    }
+    (*e)->ReleaseIntArrayElements(e, out, o, 0);
+    free(tmp);
+}
+JNIEXPORT jint FN(width)(JNIEnv *e, jclass c) { return W; }
+JNIEXPORT jint FN(height)(JNIEnv *e, jclass c) { return H; }
