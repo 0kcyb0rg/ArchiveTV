@@ -1,90 +1,110 @@
 package com.okcyborg.archivetv;
 
 import android.graphics.Bitmap;
-import android.graphics.Canvas;
-import android.graphics.Color;
-import android.graphics.Paint;
 import android.graphics.Rect;
+import android.graphics.SurfaceTexture;
+import android.media.MediaPlayer;
 import android.net.Uri;
 import android.view.GestureDetector;
-import android.view.Gravity;
 import android.view.MotionEvent;
-import android.view.View;
-import android.widget.FrameLayout;
-import android.widget.VideoView;
+import android.view.Surface;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 
-/** The TV panel: plays a video (Android's own player) under the Miyoo-style time bar.
+/** The TV: plays a video into an OpenGL texture, so it goes through the same screen effect (and the
+ *  TV's curved glass) as everything else, with the Miyoo-style time bar on top.
  *  With the buttons ("focus"): A pause, left/right 10 s, up/down 1 min, L2/R2 5 min, X full screen,
  *  Y time bar, SELECT stop, B hands the buttons back to the menus (the video keeps playing). */
 final class Tv {
     final MainActivity a;
-    final FrameLayout box; final VideoView video; final Bar bar;
-    String title, key, src; boolean ready, playing, focus, pinned; long barUntil;
+    MediaPlayer mp; SurfaceTexture st; Surface surface; final float[] stm = new float[16];
+    volatile boolean frame; int vw = 4, vh = 3, buffered = 100;
+    String title, key, src; volatile boolean ready, playing, focus, pinned; volatile long barUntil;
     String note; long noteUntil;
-    int barW = 640, barH = 480; int[] barPx; Bitmap barBmp; final Object barLock = new Object();
+    int barW = 640, barH = 480; int[] barPx; Bitmap barBmp; volatile boolean barShow;
     final GestureDetector gest;
 
     Tv(MainActivity act) {
         a = act;
-        box = new FrameLayout(a); box.setBackgroundColor(Color.BLACK);
-        video = new VideoView(a);
-        box.addView(video, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
-        video.setZOrderMediaOverlay(true);
-        bar = new Bar();
-        box.setVisibility(View.GONE); bar.setVisibility(View.GONE);
-        video.setOnPreparedListener(mp -> {
-            ready = true;
-            int at = key != null ? Store.resume(a, key) : 0;
-            if (at > 10000 && at < video.getDuration() - 30000) { video.seekTo(at); flash("Picking up where you stopped"); }
-            video.start(); poke();
-        });
-        video.setOnCompletionListener(mp -> { if (key != null) Store.setResume(a, key, 0); stop(); });
-        video.setOnErrorListener((mp, what, extra) -> { flash("Can't play this file. Try another one."); ready = true; return true; });
         gest = new GestureDetector(a, new GestureDetector.SimpleOnGestureListener() {
             @Override public boolean onDown(MotionEvent e) { return true; }
             @Override public boolean onSingleTapConfirmed(MotionEvent e) { takeFocus(); if (System.currentTimeMillis() < barUntil) barUntil = 0; else poke(); return true; }
             @Override public boolean onDoubleTap(MotionEvent e) {
-                float x = e.getX() - box.getLeft(), w = box.getWidth();
+                Rect r = a.tvArea(); float x = e.getX() - r.left, w = r.width();
                 if (x < w / 3) seek(-10000); else if (x > w * 2 / 3) seek(10000); else toggle();
                 return true;
             }
             @Override public boolean onScroll(MotionEvent e1, MotionEvent e2, float dx, float dy) {
                 /* dragging along the bottom of the picture scrubs through the video */
-                if (e1 != null && e1.getY() - box.getTop() > box.getHeight() * 0.8f && video.getDuration() > 0) {
-                    float f = Math.max(0, Math.min(1, (e2.getX() - box.getLeft()) / (float) box.getWidth()));
-                    video.seekTo((int) (f * video.getDuration())); poke();
+                Rect r = a.tvArea();
+                if (e1 != null && e1.getY() - r.top > r.height() * 0.8f && duration() > 0) {
+                    float f = Math.max(0, Math.min(1, (e2.getX() - r.left) / (float) r.width()));
+                    mp.seekTo((int) (f * duration())); poke();
                 }
                 return true;
             }
         });
     }
 
+    /** the GL thread made (or remade) the video texture */
+    void glReady(int texId) {
+        st = new SurfaceTexture(texId);
+        st.setOnFrameAvailableListener(t -> { frame = true; a.view.requestRender(); });
+        Surface old = surface; surface = new Surface(st);
+        if (mp != null) try { mp.setSurface(surface); } catch (Exception ignored) { }
+        if (old != null) old.release();
+    }
+    /** GL thread: take the newest frame, if any */
+    boolean latch() {
+        if (st == null) return false;
+        if (frame) { frame = false; try { st.updateTexImage(); st.getTransformMatrix(stm); } catch (Exception e) { return false; } }
+        return true;
+    }
+
     boolean active() { return playing; }
+    int duration() { try { return mp != null && ready ? mp.getDuration() : 0; } catch (Exception e) { return 0; } }
+    int position() { try { return mp != null && ready ? mp.getCurrentPosition() : 0; } catch (Exception e) { return 0; } }
+    boolean isPlaying() { try { return mp != null && ready && mp.isPlaying(); } catch (Exception e) { return false; } }
 
     void play(String src, String title, String key) {
         saveSpot();
-        this.src = src; this.title = title; this.key = key; ready = false; playing = true; focus = true; note = null;
-        if (src.startsWith("/")) video.setVideoPath(src); else video.setVideoURI(Uri.parse(src));
+        release();
+        this.src = src; this.title = title; this.key = key; ready = false; playing = true; focus = true; note = null; buffered = 100; frame = false;
+        mp = new MediaPlayer();
+        try {
+            if (src.startsWith("/")) mp.setDataSource(src); else mp.setDataSource(a, Uri.parse(src));
+            if (surface != null) mp.setSurface(surface);
+            mp.setOnPreparedListener(m -> {
+                ready = true;
+                int at = key != null ? Store.resume(a, key) : 0;
+                if (at > 10000 && at < m.getDuration() - 30000) { m.seekTo(at); flash("Picking up where you stopped"); }
+                m.start(); poke();
+            });
+            mp.setOnVideoSizeChangedListener((m, w, h) -> { if (w > 0 && h > 0) { vw = w; vh = h; } });
+            mp.setOnBufferingUpdateListener((m, pct) -> buffered = pct);
+            mp.setOnCompletionListener(m -> { if (key != null) Store.setResume(a, key, 0); stop(); });
+            mp.setOnErrorListener((m, what, extra) -> { flash("Can't play this file. Try another one."); ready = false; return true; });
+            mp.prepareAsync();
+        } catch (Exception e) { flash("Can't play this file. Try another one."); }
         poke();
     }
+    void release() { if (mp != null) { try { mp.release(); } catch (Exception ignored) { } mp = null; } }
     void stop() {
         saveSpot();
-        video.stopPlayback(); playing = false; focus = false; ready = false;
+        release(); playing = false; focus = false; ready = false;
         a.tvStopped();
     }
-    void pause() { if (playing && video.isPlaying()) video.pause(); }
+    void pause() { if (isPlaying()) mp.pause(); }
     void saveSpot() {
         if (!playing || !ready || key == null) return;
-        int pos = video.getCurrentPosition(), dur = video.getDuration();
+        int pos = position(), dur = duration();
         Store.setResume(a, key, dur > 0 && pos > dur - 30000 ? 0 : pos);
     }
     void takeFocus() { focus = true; poke(); }
-    void toggle() { if (video.isPlaying()) video.pause(); else video.start(); poke(); }
-    void seek(int d) { int dur = video.getDuration(); if (dur <= 0) return; video.seekTo(Math.max(0, Math.min(dur - 2000, video.getCurrentPosition() + d))); poke(); }
+    void toggle() { if (!ready) return; if (mp.isPlaying()) mp.pause(); else mp.start(); poke(); }
+    void seek(int d) { int dur = duration(); if (dur <= 0) return; mp.seekTo(Math.max(0, Math.min(dur - 2000, position() + d))); poke(); }
     void poke() { barUntil = System.currentTimeMillis() + 2500; }
     void flash(String s) { note = s; noteUntil = System.currentTimeMillis() + 2500; poke(); }
 
@@ -108,38 +128,19 @@ final class Tv {
     }
     void touch(MotionEvent e) { gest.onTouchEvent(e); }
 
-    /** the time bar, drawn by ui.c on the draw thread (under MainActivity.lock) */
-    void drawBar(double t) {
+    /** the time bar, drawn by ui.c on the draw thread (under MainActivity.lock), the size of the TV area */
+    void drawBar(double t, Rect area) {
         long now = System.currentTimeMillis();
-        boolean show = pinned || now < barUntil || !ready || (ready && !video.isPlaying());
-        int w = Math.max(2, bar.getWidth()), h = Math.max(2, bar.getHeight());
-        int bw = 640, bh = Math.max(240, (int) Math.round(640.0 * h / w)) & ~1;
-        synchronized (barLock) {
-            if (barPx == null || bw != barW || bh != barH) { barW = bw; barH = bh; barPx = new int[bw * bh]; barBmp = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888); }
-            if (show) {
-                String clock = new SimpleDateFormat("H:mm", Locale.US).format(new Date());
-                String ttl = note != null && now < noteUntil ? note : (ready ? title : "Tuning in...");
-                if (focus && a.mode != 0 && !a.full && ready && video.isPlaying() && note == null) ttl = title;
-                Native.select(2, bw, bh);
-                double avail = -1; int b = video.getBufferPercentage();
-                if (src != null && !src.startsWith("/") && b > 0 && b < 100) avail = b / 100.0;
-                Native.osd(barPx, ttl, video.getCurrentPosition() / 1000.0, video.getDuration() / 1000.0, ready && !video.isPlaying() ? 1 : 0, clock, avail, t);
-                barBmp.setPixels(barPx, 0, bw, 0, 0, bw, bh);
-            }
-            bar.show = show;
-        }
-        bar.postInvalidate();
-    }
-
-    final class Bar extends View {
-        volatile boolean show; final Paint p = new Paint(); final Rect d = new Rect();
-        Bar() { super(a); p.setFilterBitmap(false); }
-        @Override protected void onDraw(Canvas c) {
-            synchronized (barLock) {
-                if (!show || barBmp == null) return;
-                d.set(0, 0, getWidth(), getHeight());
-                c.drawBitmap(barBmp, null, d, p);
-            }
-        }
+        boolean playingNow = isPlaying();
+        barShow = pinned || now < barUntil || !ready || !playingNow;
+        if (!barShow) return;
+        int bw = 640, bh = Math.max(240, (int) Math.round(640.0 * area.height() / Math.max(1, area.width()))) & ~1;
+        if (barPx == null || bw != barW || bh != barH) { barW = bw; barH = bh; barPx = new int[bw * bh]; barBmp = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888); }
+        String clock = new SimpleDateFormat("H:mm", Locale.US).format(new Date());
+        String ttl = note != null && now < noteUntil ? note : (ready ? title : "Tuning in...");
+        Native.select(2, bw, bh);
+        double avail = src != null && !src.startsWith("/") && buffered > 0 && buffered < 100 ? buffered / 100.0 : -1;
+        Native.osd(barPx, ttl, position() / 1000.0, duration() / 1000.0, ready && !playingNow ? 1 : 0, clock, avail, t);
+        barBmp.setPixels(barPx, 0, bw, 0, 0, bw, bh);
     }
 }

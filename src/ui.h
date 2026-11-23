@@ -39,3 +39,4 @@ int ui_hit_row(int vx, int vy);
 const char *ui_hit_footer(int vx, int vy);
 int ui_hit_menu(int vx, int vy);
 int ui_hit_kb(int vx, int vy, int *kx, int *ky);
+void ui_tv_idle(const char *say, double t);

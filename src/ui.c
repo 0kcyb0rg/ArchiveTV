@@ -662,3 +662,40 @@ int ui_hit_kb(int vx, int vy, int *kx, int *ky) {   /* 1 if a key of ui_keyboard
     *kx = c; *ky = r;
     return 1;
 }
+
+/* The TV panel when nothing is on (Android): an untuned channel - snow - with the little guy hopping in
+   front of it, saying "Tuning in...". The whole picture is the TV's screen. */
+void ui_tv_idle(const char *say, double t) {
+    B = T;
+    unsigned seed = (unsigned)((int)(t * 15) * 2654435761u);
+    rng = seed ? seed : 1;
+    for (int y = 0; y < RH; y += 2) {
+        uint32_t *row = T + y * RW;
+        for (int x = 0; x < RW; x += 2) {
+            unsigned v = rnd() & 255; v = 30 + (v * v >> 9);          /* mostly dark grey snow, some bright flecks */
+            uint32_t c = (v << 16) | (v << 8) | (v < 250 ? v + 4 : v);
+            row[x] = row[x + 1] = c;
+            if (y + 1 < RH) row[RW + x] = row[RW + x + 1] = c;
+        }
+    }
+    for (int k = 0; k < 3; k++) {   /* a few rolling bright bars, like a lost signal */
+        int by = (int)((t * 23 + k * 97) * 1.0) % UH;
+        for (int y = by; y < by + 2 && y < UH; y++) for (int x = 0; x < UW; x++) {
+            uint32_t *p = T + (y * 2) * RW + x * 2; uint32_t c = *p, r = ((c >> 16) & 255) + 40; if (r > 255) r = 255;
+            p[0] = p[1] = p[RW] = p[RW + 1] = (r << 16) | (r << 8) | r;
+        }
+    }
+    static const int HOP[12] = { 0, 2, 3, 4, 4, 3, 2, 0, 0, 0, 0, 0 };
+    int hop = HOP[(int)(t * 8) % 12];
+    int my = UH / 2 - 52;
+    mascot(UW / 2 - 33, my - hop, 3, MOOD_HAPPY, t);
+    const char *msg = say && *say ? say : "Tuning in...";
+    int tw = txtw(msg, 32), bw = tw + 20, bx = (UW - bw) / 2, by = my + 88, cx = UW / 2;
+    R(bx + 2, by, bw - 4, 1, NAVY); R(bx + 2, by + 23, bw - 4, 1, NAVY);
+    R(bx, by + 2, 1, 20, NAVY); R(bx + bw - 1, by + 2, 1, 20, NAVY);
+    P(bx + 1, by + 1, NAVY); P(bx + bw - 2, by + 1, NAVY); P(bx + 1, by + 22, NAVY); P(bx + bw - 2, by + 22, NAVY);
+    R(bx + 1, by + 2, bw - 2, 20, CREAM); R(bx + 2, by + 1, bw - 4, 22, CREAM);
+    for (int i = 0; i < 6; i++) { R(cx - i - 1, by - 6 + i, 2 * i + 3, 1, NAVY); if (i) R(cx - i, by - 6 + i, 2 * i + 1, 1, CREAM); }
+    R(cx - 5, by, 11, 1, CREAM);
+    txt(bx + 10, by + 4, msg, TEXT, 32);
+}

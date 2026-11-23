@@ -57,9 +57,8 @@ public class MainActivity extends Activity implements android.opengl.GLSurfaceVi
         view.setRenderMode(android.opengl.GLSurfaceView.RENDERMODE_WHEN_DIRTY);
         view.setFocusable(true);
         root.addView(view, new android.widget.FrameLayout.LayoutParams(-1, -1));
+        view.setPreserveEGLContextOnPause(true);
         tv = new Tv(this);
-        root.addView(tv.box, new android.widget.FrameLayout.LayoutParams(1, 1));
-        root.addView(tv.bar, new android.widget.FrameLayout.LayoutParams(1, 1));
         setContentView(root);
         prefs = getSharedPreferences("atv", MODE_PRIVATE);
         theme = prefs.getInt("theme", 0); music = prefs.getBoolean("music", true); sounds = prefs.getBoolean("sounds", true);
@@ -106,7 +105,7 @@ public class MainActivity extends Activity implements android.opengl.GLSurfaceVi
         }
     }
     @Override public boolean onTouchEvent(android.view.MotionEvent e) {
-        if (tv.active() && (full || mode == 0 || tvR.contains((int) e.getX(), (int) e.getY()))) { tv.touch(e); return true; }
+        if (tv.active() && tvArea().contains((int) e.getX(), (int) e.getY())) { tv.touch(e); return true; }
         int[] v = virt(e.getX(), e.getY());
         float slop = 12 * getResources().getDisplayMetrics().density;
         switch (e.getActionMasked()) {
@@ -139,7 +138,7 @@ public class MainActivity extends Activity implements android.opengl.GLSurfaceVi
     }
     @Override public boolean onKeyUp(int code, KeyEvent e) { return Keys.map(code) != Keys.NONE || super.onKeyUp(code, e); }
 
-    @Override public void onSurfaceCreated(javax.microedition.khronos.opengles.GL10 g, javax.microedition.khronos.egl.EGLConfig c) { crt.init(); }
+    @Override public void onSurfaceCreated(javax.microedition.khronos.opengles.GL10 g, javax.microedition.khronos.egl.EGLConfig c) { crt.init(); tv.glReady(crt.videoTexture()); }
     @Override public void onSurfaceChanged(javax.microedition.khronos.opengles.GL10 g, int w, int hh) {
         android.opengl.GLES20.glViewport(0, 0, w, hh);
         stopLoop();
@@ -161,32 +160,32 @@ public class MainActivity extends Activity implements android.opengl.GLSurfaceVi
         if (mw < mh * 1.2) { W = 640; H = (int) Math.round(640.0 * mh / mw) & ~1; }
         else { H = mh >= 1000 ? 540 : 480; W = Math.min(1280, (int) Math.round(H * (double) mw / mh)) & ~1; }
         px = new int[W * H]; bmp = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888);
-        if (tvPx == null) { tvPx = new int[TVW * TVH]; tvBmp = Bitmap.createBitmap(TVW, TVH, Bitmap.Config.ARGB_8888); }
         Native.select(0, W, H);
         placeTv();
     }
-    /** puts the video and its time bar over the TV area (or the whole screen) */
-    void placeTv() {
-        Rect r = full || mode == 0 ? new Rect(0, 0, sw, sh) : tvR;
-        runOnUiThread(() -> {
-            for (View v : new View[] { tv.box, tv.bar }) {
-                android.widget.FrameLayout.LayoutParams lp = new android.widget.FrameLayout.LayoutParams(r.width(), r.height());
-                lp.leftMargin = r.left; lp.topMargin = r.top;
-                v.setLayoutParams(lp);
-            }
-            tv.box.setVisibility(tv.active() ? View.VISIBLE : View.GONE);
-            tv.bar.setVisibility(tv.active() ? View.VISIBLE : View.GONE);
-        });
-    }
+    /** where the TV is on screen right now: its half, or the whole screen when full screen (or no room beside it) */
+    Rect tvArea() { return full || mode == 0 ? new Rect(0, 0, sw, sh) : new Rect(tvR); }
+    void placeTv() { view.requestRender(); }
     void setFull(boolean f) { full = f; placeTv(); }
-    /** the GL thread: put the latest pictures on screen through the screen-effect shader */
+    /** the GL thread: everything goes through the screen effect; only the TV gets the curved glass */
     @Override public void onDrawFrame(javax.microedition.khronos.opengles.GL10 g) {
         android.opengl.GLES20.glClearColor(18 / 255f, 10 / 255f, 30 / 255f, 1f);
         android.opengl.GLES20.glClear(android.opengl.GLES20.GL_COLOR_BUFFER_BIT);
+        boolean hasFrame = tv.latch();
         synchronized (lock) {
             if (bmp == null) return;
-            crt.draw(0, bmp, drawMenu, sw, sh, fx, curve);
-            if (drawIdle && tvBmp != null) crt.draw(1, tvBmp, drawTv, sw, sh, fx, curve);
+            boolean tvFull = tv.active() && (full || mode == 0);
+            if (!tvFull) crt.draw(0, bmp, drawMenu, sw, sh, fx, false, false);
+            Rect area = tvArea();
+            if (tv.active()) {
+                /* black glass, then the picture fitted inside it, then the time bar */
+                android.opengl.GLES20.glEnable(android.opengl.GLES20.GL_SCISSOR_TEST);
+                android.opengl.GLES20.glScissor(area.left, sh - area.bottom, area.width(), area.height());
+                android.opengl.GLES20.glClearColor(0, 0, 0, 1); android.opengl.GLES20.glClear(android.opengl.GLES20.GL_COLOR_BUFFER_BIT);
+                android.opengl.GLES20.glDisable(android.opengl.GLES20.GL_SCISSOR_TEST);
+                if (hasFrame && tv.ready) { Rect vr = new Rect(); fit(area, tv.vw, tv.vh, vr); crt.drawVideo(vr, sw, sh, fx, curve, tv.stm, 270f * vr.height() / Math.max(1, area.height())); }
+                if (tv.barShow && tv.barBmp != null) crt.draw(1, tv.barBmp, area, sw, sh, fx == 0 ? 0 : 1, curve, true);
+            } else if (drawIdle && tvBmp != null) crt.draw(1, tvBmp, drawTv, sw, sh, fx, curve, false);
         }
     }
     void stopLoop() { running = false; if (loop != null) try { loop.join(); } catch (InterruptedException ignored) { } loop = null; }
@@ -214,19 +213,21 @@ public class MainActivity extends Activity implements android.opengl.GLSurfaceVi
                 Native.frame(px);
                 bmp.setPixels(px, 0, W, 0, 0, W, H);
                 boolean idleTv = mode != 0 && !tv.active() && !(s instanceof Hello);
-                if (idleTv) {   /* the little guy hops on the TV until something plays */
-                    Native.select(1, TVW, TVH);
-                    Native.hello(hello, 99, null, t);
+                if (idleTv) {   /* an untuned TV with the little guy hopping on it, until something plays */
+                    int th = Math.max(240, (int) Math.round(640.0 * tvR.height() / Math.max(1, tvR.width()))) & ~1;
+                    if (tvBmp == null || tvBmp.getHeight() != th) { tvPx = new int[640 * th]; tvBmp = Bitmap.createBitmap(640, th, Bitmap.Config.ARGB_8888); }
+                    Native.select(1, 640, th);
+                    Native.tvIdle("Tuning in...", t);
                     Native.frame(tvPx);
-                    tvBmp.setPixels(tvPx, 0, TVW, 0, 0, TVW, TVH);
+                    tvBmp.setPixels(tvPx, 0, 640, 0, 0, 640, th);
                 }
-                if (tv.active()) tv.drawBar(t);
+                if (tv.active()) tv.drawBar(t, tvArea());
                 Native.select(0, W, H);
                 Rect mr = s instanceof Hello ? new Rect(0, 0, sw, sh) : menuR;
                 fit(mr, W, H, dst);
                 synchronized (dst) { drawMenu.set(dst); }
                 drawIdle = idleTv;
-                if (idleTv) fit(tvR, TVW, TVH, drawTv);
+                if (idleTv) drawTv.set(tvR);
             }
             view.requestRender();
             long el = (System.nanoTime() - start) / 1000000;
@@ -252,9 +253,10 @@ public class MainActivity extends Activity implements android.opengl.GLSurfaceVi
     }
     void playSrc(String src, String title, String key) {
         runOnUiThread(() -> { tv.play(src, title, key); musicOn(false); placeTv(); });
+        view.setRenderMode(android.opengl.GLSurfaceView.RENDERMODE_WHEN_DIRTY);
     }
     /** the TV stopped: back to the little guy, and the music */
-    void tvStopped() { full = false; placeTv(); musicOn(true); }
+    void tvStopped() { full = false; placeTv(); runOnUiThread(() -> musicOn(true)); }
     /** the download % in the footer, like the Miyoo's arrow badge */
     void badge() { String b = Downloader.badge(); if (b != null) Native.footerBadge(b); }
 

@@ -33,4 +33,5 @@ final class Native {
     static native String hitFooter(int x, int y);
     static native int hitMenu(int x, int y);
     static native int hitKb(int x, int y);
+    static native void tvIdle(String say, double t);
 }

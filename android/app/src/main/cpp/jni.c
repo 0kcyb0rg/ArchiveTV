@@ -127,3 +127,4 @@ JNIEXPORT jint FN(hitRow)(JNIEnv *e, jclass c, jint x, jint y) { return ui_hit_r
 JNIEXPORT jstring FN(hitFooter)(JNIEnv *e, jclass c, jint x, jint y) { const char *k = ui_hit_footer(x, y); return k ? (*e)->NewStringUTF(e, k) : 0; }
 JNIEXPORT jint FN(hitMenu)(JNIEnv *e, jclass c, jint x, jint y) { return ui_hit_menu(x, y); }
 JNIEXPORT jint FN(hitKb)(JNIEnv *e, jclass c, jint x, jint y) { int kx, ky; return ui_hit_kb(x, y, &kx, &ky) ? kx + ky * 16 : -1; }
+JNIEXPORT void FN(tvIdle)(JNIEnv *e, jclass c, jstring say, jdouble t) { char *a = l1(e, say); ui_tv_idle(a, t); free(a); }
