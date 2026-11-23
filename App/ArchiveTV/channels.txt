@@ -1,0 +1,5 @@
+# Your saved shows, collections and searches (the Saved tab).
+# Press Y in the app to add things; X twice in the Saved tab removes them.
+#   collection <id> | Name     item <id> | Name     search <words> | Name     csearch <words> | Name
+
+item anime-stuff-three_202111 | Anime Stuff Three

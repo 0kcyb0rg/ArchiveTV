@@ -1,0 +1,251 @@
+# ArchiveTV guide: the categories in the Guide tab.
+# [Category] starts a group; [Parent > Child] puts it inside a folder. Then one entry per line:
+#   collection_id | Name        opens an archive.org collection (archive.org/details/<id>)
+#   search words | Name         runs a video search (use "quotes" for exact titles)
+
+[Cartoons]
+classic_cartoons | Classic Cartoons
+animationandcartoons | Animation & Cartoons
+vintage_cartoons | Vintage Cartoons
+saturdaymorningcartoons | Saturday Morning Cartoons
+more_animation | More Animation
+
+[80s & 90s Cartoons]
+search "Thundercats" | ThunderCats
+search "He-Man" | He-Man
+search "She-Ra" | She-Ra
+search "G.I. Joe" | G.I. Joe
+search "Transformers" | Transformers
+search "Teenage Mutant Ninja Turtles" | Ninja Turtles
+search "Inspector Gadget" | Inspector Gadget
+search "DuckTales" | DuckTales
+search "Smurfs" | The Smurfs
+search "Care Bears" | Care Bears
+search "Jem and the Holograms" | Jem
+search "Real Ghostbusters" | The Real Ghostbusters
+search "Garfield and Friends" | Garfield and Friends
+search "Animaniacs" | Animaniacs
+search "Tiny Toon Adventures" | Tiny Toon Adventures
+search "Darkwing Duck" | Darkwing Duck
+search "Batman The Animated Series" | Batman: The Animated Series
+search "X-Men animated" | X-Men
+search "Captain Planet" | Captain Planet
+search "Rugrats" | Rugrats
+search "Ren and Stimpy" | Ren & Stimpy
+search "Beetlejuice cartoon" | Beetlejuice
+search "Muppet Babies" | Muppet Babies
+
+[Anime]
+anime | Anime
+anime-series | Anime Series
+anime_miscellaneous | Anime Miscellaneous
+animepacks | Anime Packs
+animecollection_pokemon | Pokemon
+
+[80s & 90s Anime > Popular]
+search "Sailor Moon" | Sailor Moon
+search "Dragon Ball Z" | Dragon Ball Z
+search "Dragon Ball" | Dragon Ball
+search "Neon Genesis Evangelion" | Evangelion
+search "Cowboy Bebop" | Cowboy Bebop
+search "Robotech" | Robotech
+search "Voltron" | Voltron
+search "Ranma" | Ranma 1/2
+search "Yu Yu Hakusho" | Yu Yu Hakusho
+search "Rurouni Kenshin" | Rurouni Kenshin
+search "Trigun" | Trigun
+search "Slayers" | Slayers
+search "Tenchi Muyo" | Tenchi Muyo
+search "Outlaw Star" | Outlaw Star
+search "Gundam Wing" | Gundam Wing
+search "Pokemon" | Pokemon
+search "Digimon" | Digimon
+search "Cardcaptor Sakura" | Cardcaptor Sakura
+
+[80s & 90s Anime > OVAs]
+search "Bubblegum Crisis" | Bubblegum Crisis
+search "Bubblegum Crash" | Bubblegum Crash
+search "Megazone 23" | Megazone 23
+search "Gunbuster" | Gunbuster
+search "Giant Robo" | Giant Robo
+search "Patlabor" | Patlabor
+search "Dominion Tank Police" | Dominion Tank Police
+search "Riding Bean" | Riding Bean
+search "Gunsmith Cats" | Gunsmith Cats
+search "Cyber City Oedo 808" | Cyber City Oedo 808
+search "Armitage III" | Armitage III
+search "Record of Lodoss War" | Record of Lodoss War
+search "Legend of Galactic Heroes" | Legend of Galactic Heroes
+search "Gall Force" | Gall Force
+search "Iczer" | Iczer-1
+search "Dirty Pair" | Dirty Pair
+search "Oh My Goddess" | Oh My Goddess!
+search "Macross Plus" | Macross Plus
+search "Gundam 0080" | Gundam 0080
+search "Gundam 0083" | Gundam 0083
+search "Detonator Orgun" | Detonator Orgun
+search "Bastard!!" | Bastard!!
+search "Devilman OVA" | Devilman
+search "Vampire Hunter D" | Vampire Hunter D
+
+[80s & 90s Anime > Movies]
+search "Akira 1988" | Akira
+search "Ghost in the Shell 1995" | Ghost in the Shell
+search "Perfect Blue" | Perfect Blue
+search "Ninja Scroll" | Ninja Scroll
+search "Wicked City" | Wicked City
+search "Project A-ko" | Project A-ko
+search "Memories 1995 anime" | Memories
+search "Wings of Honneamise" | Wings of Honneamise
+search "Patlabor 2" | Patlabor 2
+search "Macross Do You Remember Love" | Macross: Do You Remember Love?
+search "Angel's Egg" | Angel's Egg
+search "Beautiful Dreamer" | Urusei Yatsura 2
+search "Fist of the North Star 1986" | Fist of the North Star (1986)
+search "Street Fighter II animated movie" | Street Fighter II: The Movie
+search "Golgo 13" | Golgo 13
+search "Lensman" | Lensman
+search "Castle of Cagliostro" | Castle of Cagliostro
+search "Nausicaa" | Nausicaa
+
+[80s & 90s Anime > Mecha]
+search "Mobile Suit Gundam" | Mobile Suit Gundam
+search "Zeta Gundam" | Zeta Gundam
+search "Char's Counterattack" | Char's Counterattack
+search "G Gundam" | G Gundam
+search "Super Dimension Fortress Macross" | Macross
+search "Macross 7" | Macross 7
+search "Votoms" | Armored Trooper Votoms
+search "Dunbine" | Aura Battler Dunbine
+search "Mospeada" | Genesis Climber Mospeada
+search "Escaflowne" | Escaflowne
+search "Getter Robo" | Getter Robo
+search "Mazinger" | Mazinger Z
+search "Dancougar" | Dancougar
+search "GaoGaiGar" | GaoGaiGar
+search "Brain Powerd" | Brain Powerd
+
+[80s & 90s Anime > Magical Girl]
+search "Sailor Moon" | Sailor Moon
+search "Cardcaptor Sakura" | Cardcaptor Sakura
+search "Creamy Mami" | Creamy Mami
+search "Minky Momo" | Minky Momo
+search "Magic Knight Rayearth" | Magic Knight Rayearth
+search "Revolutionary Girl Utena" | Revolutionary Girl Utena
+search "Wedding Peach" | Wedding Peach
+search "Pretty Sammy" | Pretty Sammy
+search "Ojamajo Doremi" | Ojamajo Doremi
+search "Fushigi Yugi" | Fushigi Yugi
+search "Marmalade Boy" | Marmalade Boy
+
+[80s & 90s Anime > Action]
+search "Fist of the North Star" | Fist of the North Star
+search "Saint Seiya" | Saint Seiya
+search "City Hunter" | City Hunter
+search "Lupin III" | Lupin III
+search "Berserk 1997" | Berserk (1997)
+search "Hunter x Hunter 1999" | Hunter x Hunter (1999)
+search "Captain Harlock" | Captain Harlock
+search "Cobra anime" | Space Adventure Cobra
+search "Captain Tsubasa" | Captain Tsubasa
+search "Slam Dunk" | Slam Dunk
+search "Yu-Gi-Oh 1998" | Yu-Gi-Oh! (1998)
+
+[80s & 90s Anime > Comedy]
+search "Urusei Yatsura" | Urusei Yatsura
+search "Maison Ikkoku" | Maison Ikkoku
+search "Kimagure Orange Road" | Kimagure Orange Road
+search "Dr. Slump" | Dr. Slump
+search "Great Teacher Onizuka" | Great Teacher Onizuka
+search "Detective Conan" | Detective Conan
+search "Chibi Maruko-chan" | Chibi Maruko-chan
+search "Doraemon" | Doraemon
+search "Crayon Shin-chan" | Crayon Shin-chan
+search "Excel Saga" | Excel Saga
+search "Samurai Pizza Cats" | Samurai Pizza Cats
+
+[80s & 90s Anime > Kids TV Dubs]
+search "Speed Racer" | Speed Racer
+search "Astro Boy" | Astro Boy
+search "Star Blazers" | Star Blazers
+search "Battle of the Planets" | Battle of the Planets
+search "Robotech" | Robotech
+search "Voltron" | Voltron
+search "Grimm's Fairy Tale Classics" | Grimm's Fairy Tale Classics
+search "Noozles" | Noozles
+search "The Littl' Bits" | The Littl' Bits
+search "Maple Town" | Maple Town
+search "Tranzor Z" | Tranzor Z
+
+[Movies]
+feature_films | Feature Films
+Comedy_Films | Comedy Films
+Film_Noir | Film Noir
+SciFi_Horror | Sci-Fi & Horror
+silent_films | Silent Films
+short_films | Short Films
+vhsmovies | VHS Movies
+movie_trailers | Movie Trailers
+
+[Classic TV]
+classic_tv | Classic TV
+classic_tv_1950s | 1950s TV
+classic_tv_1960s | 1960s TV
+classic_tv_1970s | 1970s TV
+childrenstelevision | Children's TV
+gameshows | Game Shows
+classic_tv_commercials | Old Commercials
+vhsvault | VHS Vault
+miscellaneous-japanese-tv | Japanese TV
+
+[80s & 90s TV]
+search "Saved by the Bell" | Saved by the Bell
+search "Full House" | Full House
+search "Fresh Prince of Bel-Air" | Fresh Prince
+search "Twin Peaks" | Twin Peaks
+search "X-Files" | The X-Files
+search "Star Trek The Next Generation" | Star Trek: TNG
+search "Knight Rider" | Knight Rider
+search "The A-Team" | The A-Team
+search "Miami Vice" | Miami Vice
+search "MacGyver" | MacGyver
+search "Pee-wee's Playhouse" | Pee-wee's Playhouse
+search "Reading Rainbow" | Reading Rainbow
+search "Mister Rogers" | Mister Rogers
+search "Bill Nye the Science Guy" | Bill Nye
+search "Unsolved Mysteries" | Unsolved Mysteries
+search "Are You Afraid of the Dark" | Are You Afraid of the Dark?
+search "Goosebumps" | Goosebumps
+search "Mystery Science Theater 3000" | MST3K
+search "Max Headroom" | Max Headroom
+search "80s commercials" | 80s Commercials
+search "90s commercials" | 90s Commercials
+
+[Video Games]
+gamevideos | Game Videos
+speed_runs | Speedruns
+g4video-web | G4
+videogameprev | Game Previews
+machinima | Machinima
+search "Nintendo commercial" | Old Nintendo Ads
+search "Sega commercial" | Old Sega Ads
+search "Nick Arcade" | Nick Arcade
+search "Captain N" | Captain N
+search "GamePro TV" | GamePro TV
+
+[Learn & Docs]
+computerchronicles | The Computer Chronicles
+prelinger | Prelinger Archives
+educationalfilms | Educational Films
+nasa | NASA
+avgeeks | A/V Geeks
+PeriscopeFilm | Periscope Film
+computersandtechvideos | Computers & Tech
+
+[Music]
+musicvideobin | Music Videos
+musictelevision | Music Television
+artsandmusicvideos | Arts & Music
+search "120 Minutes" | MTV 120 Minutes
+search "Yo! MTV Raps" | Yo! MTV Raps
+search "Headbangers Ball" | Headbangers Ball
