@@ -33,6 +33,8 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     final Object lock = new Object();
     final ArrayDeque<Screen> stack = new ArrayDeque<>();
     final ArrayDeque<Integer> keyq = new ArrayDeque<>();
+    final ArrayDeque<int[]> touchq = new ArrayDeque<>();   /* {kind, vx, vy}: 0 down, 1 drag, 2 tap, 3 swipe left, 4 swipe right */
+    final Rect dst = new Rect(); float downX, downY; boolean dragging;
     final double t0 = System.nanoTime() / 1e9;
     SharedPreferences prefs;
     int theme = 0; boolean music = true, sounds = true, group = true;
@@ -75,10 +77,52 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     }
 
     @Override public boolean onKeyDown(int code, KeyEvent e) {
+        if (e.getDevice() != null && e.getDevice().getKeyboardType() == android.view.InputDevice.KEYBOARD_TYPE_ALPHABETIC) {
+            int ch = code == KeyEvent.KEYCODE_DEL ? '\b' : code == KeyEvent.KEYCODE_ENTER ? '\n' : e.getUnicodeChar();
+            synchronized (lock) { Screen s = stack.peek(); if (s instanceof Keyboard && ch > 0 && ((Keyboard) s).typed(ch)) return true; }
+        }
         int k = Keys.map(code);
         if (k == Keys.NONE) return super.onKeyDown(code, e);
         synchronized (lock) { keyq.add(k); }
         return true;
+    }
+    /* touch: screen position -> the UI's virtual pixels (half the drawn picture) */
+    int[] virt(float x, float y) {
+        synchronized (dst) {
+            if (dst.width() <= 0) return new int[] { -1, -1 };
+            return new int[] { (int) ((x - dst.left) * W / dst.width() / 2), (int) ((y - dst.top) * H / dst.height() / 2) };
+        }
+    }
+    @Override public boolean onTouchEvent(android.view.MotionEvent e) {
+        int[] v = virt(e.getX(), e.getY());
+        float slop = 12 * getResources().getDisplayMetrics().density;
+        switch (e.getActionMasked()) {
+            case android.view.MotionEvent.ACTION_DOWN:
+                downX = e.getX(); downY = e.getY(); dragging = false;
+                synchronized (lock) { touchq.add(new int[] { 0, v[0], v[1] }); }
+                return true;
+            case android.view.MotionEvent.ACTION_MOVE:
+                if (!dragging && Math.abs(e.getY() - downY) > slop && Math.abs(e.getY() - downY) > Math.abs(e.getX() - downX)) dragging = true;
+                if (dragging) synchronized (lock) { touchq.add(new int[] { 1, v[0], v[1] }); }
+                return true;
+            case android.view.MotionEvent.ACTION_UP:
+                float dx = e.getX() - downX, dy = e.getY() - downY;
+                synchronized (lock) {
+                    if (!dragging && Math.abs(dx) > slop * 5 && Math.abs(dx) > Math.abs(dy) * 2) touchq.add(new int[] { dx < 0 ? 3 : 4, v[0], v[1] });
+                    else if (!dragging && Math.abs(dx) < slop && Math.abs(dy) < slop) touchq.add(new int[] { 2, v[0], v[1] });
+                }
+                return true;
+        }
+        return super.onTouchEvent(e);
+    }
+    static int footerKey(String k) {
+        if (k == null) return Keys.NONE;
+        switch (k) {
+            case "A": return Keys.A; case "B": return Keys.B; case "X": return Keys.X; case "Y": return Keys.Y;
+            case "START": return Keys.START; case "SELECT": return Keys.SELECT; case "MENU": return Keys.MENU;
+            case "L/R": return Keys.R1;
+            default: return Keys.NONE;
+        }
     }
     @Override public boolean onKeyUp(int code, KeyEvent e) { return Keys.map(code) != Keys.NONE || super.onKeyUp(code, e); }
 
@@ -101,7 +145,6 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
 
     void run() {
         SurfaceHolder h = view.getHolder();
-        Rect dst = new Rect();
         paint.setFilterBitmap(false);
         while (running) {
             long start = System.nanoTime();
@@ -110,6 +153,11 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                     int k = keyq.poll();
                     Screen s = stack.peek();
                     if (s != null) s.key(k);
+                }
+                while (!touchq.isEmpty()) {
+                    int[] ev = touchq.poll();
+                    Screen s = stack.peek();
+                    if (s != null) s.touch(ev[0], ev[1], ev[2]);
                 }
                 Screen s = stack.peek();
                 if (s == null) { runOnUiThread(this::finish); running = false; break; }
@@ -122,7 +170,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                 c.drawColor(Color.BLACK);
                 double sc = Math.min(c.getWidth() / (double) W, c.getHeight() / (double) H);
                 int dw = (int) (W * sc), dh = (int) (H * sc);
-                dst.set((c.getWidth() - dw) / 2, (c.getHeight() - dh) / 2, (c.getWidth() + dw) / 2, (c.getHeight() + dh) / 2);
+                synchronized (dst) { dst.set((c.getWidth() - dw) / 2, (c.getHeight() - dh) / 2, (c.getWidth() + dw) / 2, (c.getHeight() + dh) / 2); }
                 c.drawBitmap(bmp, null, dst, paint);
                 h.unlockCanvasAndPost(c);
             }
@@ -149,7 +197,18 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     void badge() { String b = Downloader.badge(); if (b != null) Native.footerBadge(b); }
 
     // ---------------- screens ----------------
-    abstract static class Screen { abstract void draw(double t); abstract void key(int k); }
+    abstract class Screen {
+        abstract void draw(double t); abstract void key(int k);
+        /** taps on footer hints press that button; a tap on the little TV in the corner goes back */
+        void touch(int kind, int x, int y) {
+            if (kind != 2) return;
+            int k = footerKey(Native.hitFooter(x, y));
+            if (k != Keys.NONE) { key(k); return; }
+            if (x < 36 && y < 36) key(Keys.B);
+            else tapElse(x, y);
+        }
+        void tapElse(int x, int y) { }
+    }
 
     static final String[] SAY = { "Let's watch old TV!", "Old TV was better, right?", "Hey, let's go back in time!", "I hate new anime, blehhh", "Let's go back to the 90s!", "Eat my shorts!" };
 
@@ -161,6 +220,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             Native.hello(say, shown, shown > say.length() + 6 ? "A:Start" : null, t);
         }
         void key(int k) { if (k == Keys.A || k == Keys.START) { sfx(sSelect); stack.pop(); push(new Tabs()); } else if (k == Keys.B) { stack.pop(); } }
+        void touch(int kind, int x, int y) { if (kind == 2) key(Keys.A); }
     }
 
     /** a list of rows the user can move through; subclasses fill rows and react to buttons */
@@ -179,6 +239,25 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             Native.list(m.toArray(new String[0]), s.toArray(new String[0]), tn, sel, top, (int) ((t - selT) * 1000), t, empty);
             if (t - statusT < 2.5 && !status.isEmpty()) Native.toast(status);
         }
+        int dragBase, dragY0;
+        void touch(int kind, int x, int y) {
+            if (kind == 0) { dragBase = sel; dragY0 = y; return; }
+            if (kind == 1) {   /* drag: the list follows the finger, one row per row height */
+                int n = m.size(); if (n == 0) return;
+                int to = Math.max(0, Math.min(n - 1, dragBase + (dragY0 - y) / 18));
+                if (to != sel) { sel = to; selT = now(); sfx(sMove); }
+                return;
+            }
+            if (kind == 3 || kind == 4) { swipe(kind == 3); return; }
+            if (kind != 2) return;
+            int r = Native.hitRow(x, y);
+            if (r >= 0 && top + r < m.size() && Native.hitFooter(x, y) == null) {
+                if (top + r == sel) key(Keys.A); else { sel = top + r; selT = now(); sfx(sMove); }
+                return;
+            }
+            super.touch(kind, x, y);
+        }
+        void swipe(boolean left) { }
         boolean move(int k) {
             int n = m.size(), vis = Native.visibleRows(), o = sel;
             if (n == 0) return false;
@@ -279,6 +358,12 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                     save(); fill();
             }
         }
+        void tapElse(int x, int y) { }
+        void touch(int kind, int x, int y) {
+            if (kind == 2) { int tb = Native.hitTab(x, y); if (tb >= 0) { if (tb != tab) { tab = tb; sel = 0; top = 0; selT = now(); sfx(sTab); fill(); } return; } }
+            super.touch(kind, x, y);
+        }
+        void swipe(boolean left) { key(left ? Keys.R1 : Keys.L1); }
         void removeAt() {
             if (m.isEmpty()) return;
             if (tab == 2) { String name = m.get(sel); push(new Ask("Remove?", "Remove from Saved?", name, "A:Remove  B:Keep", () -> { Store.unsave(sel); fill(); say("Removed."); })); }
@@ -374,6 +459,12 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         final String title; final String[] items; final Pick cb; int sel = 0;
         Menu(String title, String[] items, Pick cb) { this.title = title; this.items = items; this.cb = cb; }
         void draw(double t) { Screen under = stack.size() > 1 ? new ArrayList<>(stack).get(1) : null; if (under != null) under.draw(t); Native.menu(title, items, sel, t); }
+        void touch(int kind, int x, int y) {
+            if (kind != 2) return;
+            int i = Native.hitMenu(x, y);
+            if (i == -2) { sfx(sBack); pop(); }
+            else if (i >= 0 && i < items.length) { sel = i; key(Keys.A); }
+        }
         void key(int k) {
             if (k == Keys.UP) { sel = (sel + items.length - 1) % items.length; sfx(sMove); }
             else if (k == Keys.DOWN) { sel = (sel + 1) % items.length; sfx(sMove); }
@@ -554,6 +645,14 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             }
         }
         void submit() { String q = text.toString().trim(); if (q.isEmpty()) return; sfx(sSelect); cb.done(q); }
+        void tapElse(int x, int y) { int h = Native.hitKb(x, y); if (h >= 0) { kx = h % 16; ky = h / 16; key(Keys.A); } }
+        /* a real keyboard (USB or Bluetooth) types straight in */
+        boolean typed(int ch) {
+            if (ch == '\n') { submit(); return true; }
+            if (ch == '\b') { if (text.length() > 0) text.setLength(text.length() - 1); return true; }
+            if (ch >= 32 && ch < 256 && text.length() < 60) { text.append((char) ch); return true; }
+            return false;
+        }
     }
 
     static final class Guide {

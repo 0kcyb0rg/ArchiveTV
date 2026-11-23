@@ -34,3 +34,8 @@ void ui_set_theme(int i);
 void ui_footer_badge(const char *b);
 void ui_hello(const char *say, int shown, const char *hints, double t);   /* shown = letters typed so far */
 void ui_about(double t);
+int ui_hit_tab(int vx, int vy);
+int ui_hit_row(int vx, int vy);
+const char *ui_hit_footer(int vx, int vy);
+int ui_hit_menu(int vx, int vy);
+int ui_hit_kb(int vx, int vy, int *kx, int *ky);

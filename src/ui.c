@@ -269,6 +269,10 @@ static void button_icon(int x, int y, const char *k, int *w) {
 /* hints like "A:Open  B:Back  MENU:Quit" */
 static char foot_badge[24];
 void ui_footer_badge(const char *b) { snprintf(foot_badge, sizeof foot_badge, "%s", b ? b : ""); }
+/* touch: where things were last drawn, in virtual pixels */
+static int tab_x0[16], tab_x1[16], ntab_hit;
+static int foot_x0[10], foot_x1[10], nfoot; static char foot_k[10][8];
+static int menu_x, menu_y, menu_w, menu_h, menu_n;
 void ui_footer(const char *hints) {
     B = T;
     win(4, UH - 26, UW - 8, 22, CREAM);
@@ -284,6 +288,7 @@ void ui_footer(const char *hints) {
         }
         txt(bx + 4 + (arrow ? 8 : 0), UH - 23, bt, MINT, 12);
     }
+    nfoot = 0;
     if (!hints) return;
     int x = 12, y = UH - 22;
     char tok[64];
@@ -297,9 +302,11 @@ void ui_footer(const char *hints) {
         char *colon = strchr(tok, ':');
         if (colon) {
             *colon = 0; int w = 0;
+            int fx = x;
             button_icon(x, y + 1, tok, &w);
             x += w + 4;
             x += txt(x, y, colon + 1, INK, 20) + 12;
+            if (nfoot < 10) { foot_x0[nfoot] = fx - 4; foot_x1[nfoot] = x - 6; snprintf(foot_k[nfoot], sizeof foot_k[0], "%s", tok); nfoot++; }
         } else x += txt(x, y, tok, INK, 30) + 12;
         if (x > UW - 20 - bw) break;
     }
@@ -539,8 +546,10 @@ void ui_header_tabs(const char *const *tabs, int n, int sel, const char *right, 
     int gap = n > 1 ? (avail - total) / (n - 1) : 0;
     if (gap > 8) gap = 8;
     if (gap < 0) gap = 0;
+    ntab_hit = n > 16 ? 16 : n;
     for (int i = 0; i < n; i++) {
         int w = TABW(i);
+        if (i < 16) { tab_x0[i] = x; tab_x1[i] = x + w; }
         if (i == sel) pill(x, 13, w, 18, NAVY), pill(x + 1, 14, w - 2, 16, TH->tab ? TH->tab : PINK);
         uint32_t c = i == sel ? PILLTX : DIM;
         if (tabs[i][0] == 1) {   /* little pixel gear */
@@ -559,6 +568,7 @@ void ui_menu(const char *title, const char *const *items, int n, int sel, double
     int w = maxl + 40, h = n * UROWH + 34;
     if (w < 160) w = 160;
     int x = (UW - w) / 2, y = (UH - h) / 2;
+    menu_x = x; menu_y = y; menu_w = w; menu_h = h; menu_n = n;
     win(x, y, w, h, WHITE);
     R(x + 2, y + 2, w - 4, 20, CREAM);
     R(x + 2, y + 22, w - 4, 1, NAVY);
@@ -620,4 +630,35 @@ void ui_about(double t) {
     txt(x, y, "Effect", DIM, 10);    txt(vx, y, "Onion OS scanlines", TEXT, 26); y += 15;
     ui_footer_badge("");
     ui_footer("B:Back");
+}
+
+/* ---------- touch screens (Android): what's under a finger, in virtual pixels (real / 2) ---------- */
+int ui_hit_tab(int vx, int vy) {
+    if (vy < 9 || vy > 35) return -1;
+    for (int i = 0; i < ntab_hit; i++) if (vx >= tab_x0[i] - 4 && vx < tab_x1[i] + 4) return i;
+    return -1;
+}
+int ui_hit_row(int vx, int vy) {   /* which visible list row (0 = the top one shown), -1 = none */
+    if (vx < 4 || vx > UW - 4 || vy < 44) return -1;
+    int i = (vy - 44) / UROWH;
+    return i < UVIS ? i : -1;
+}
+const char *ui_hit_footer(int vx, int vy) {   /* the button name of the footer hint under the finger */
+    if (vy < UH - 28) return 0;
+    for (int i = 0; i < nfoot; i++) if (vx >= foot_x0[i] && vx < foot_x1[i]) return foot_k[i];
+    return 0;
+}
+int ui_hit_menu(int vx, int vy) {   /* item index, -1 = inside the box but no item, -2 = outside */
+    if (vx < menu_x || vx >= menu_x + menu_w || vy < menu_y || vy >= menu_y + menu_h) return -2;
+    if (vy < menu_y + 27) return -1;
+    int i = (vy - menu_y - 27) / UROWH;
+    return i < menu_n ? i : -1;
+}
+int ui_hit_kb(int vx, int vy, int *kx, int *ky) {   /* 1 if a key of ui_keyboard is under the finger */
+    int kw = 28, kh = 22, x0 = (UW - (10 * (kw + 2) - 2)) / 2, y0 = 80 + OY / 2;
+    if (vx < x0 || vy < y0) return 0;
+    int c = (vx - x0) / (kw + 2), r = (vy - y0) / (kh + 3);
+    if (c > 9 || r > 4) return 0;
+    *kx = c; *ky = r;
+    return 1;
 }

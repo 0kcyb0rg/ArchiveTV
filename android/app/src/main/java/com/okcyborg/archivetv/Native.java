@@ -27,4 +27,9 @@ final class Native {
     static native void osd(int[] out, String title, double pos, double dur, int paused, String clock, double avail, double t);
     static native int width();
     static native int height();
+    static native int hitTab(int x, int y);
+    static native int hitRow(int x, int y);
+    static native String hitFooter(int x, int y);
+    static native int hitMenu(int x, int y);
+    static native int hitKb(int x, int y);
 }
