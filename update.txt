@@ -1,0 +1,37 @@
+archivetv-update 1
+version 1.4
+base https://raw.githubusercontent.com/mroxfordyazuka/ArchiveTV/a7096580d40d0453fb87a0e7494fb5771d990005/App/ArchiveTV/
+file 3f125a4f 4654 README.txt
+file e86cdeff 177112 archivetv
+file f97aee3d 224606 cacert.pem
+file 75cb0707 257 config.json
+file 00000000 0 full_resolution
+file d62a288f 8728 guide.txt
+file 70faa475 6401 icon.png
+file 354adda3 2682 launch.sh
+file 464046ba 4687052 bin/curl
+file 1539ca67 3157796 libs/libavcodec.so.56
+file 27fa45cf 410188 libs/libavformat.so.56
+file a25470bb 272312 libs/libavutil.so.54
+file 1b276a97 67168 libs/libswresample.so.1
+file 86e2b4b4 11358 licenses/Apache-2.0-OpenSSL.txt
+file 14305290 391 licenses/FFmpeg-NOTICE.txt
+file 9af2bc0e 26526 licenses/LGPL-2.1-FFmpeg.txt
+file eac941ac 1722 licenses/LICENSE-ArchiveTV.txt
+file 89884678 16726 licenses/MPL-2.0-cacert.txt
+file 08e4d96d 1088 licenses/curl-COPYING.txt
+file 2172ce17 294 licenses/curl-NOTICE.txt
+file df76007c 2840884 music/music.ogg
+file d678fe74 47 music/music.txt
+file 30d2bcb3 18 overlays/effects.txt
+file 0b24dc32 1228800 overlays/scanv.ovl
+file 817f9323 1684480 overlays/scanv_752x560.ovl
+file baf6dca4 9702 sfx/back.raw
+file afd1fe48 41006 sfx/done.raw
+file 98aa62ef 23814 sfx/error.raw
+file 92583801 49392 sfx/hello.raw
+file b244b061 3086 sfx/move.raw
+file c3190510 10142 sfx/select.raw
+file 9e71aa7c 7056 sfx/tab.raw
+file 99727bd9 7496 sfx/toggle.raw
+file ce7c3115 2822 sfx/type.raw
