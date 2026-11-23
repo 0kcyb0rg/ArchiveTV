@@ -11,7 +11,7 @@ app, commit, out = sys.argv[1], sys.argv[2], sys.argv[3]
 version = re.search(r'#define APP_VERSION "([^"]+)"',
                     open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src', 'version.h')).read()).group(1)
 # the user's own files (and channels.txt, which they edit by saving shows) are never part of an update
-skip = {'settings.txt', 'queue.txt', 'searches.txt', 'channels.txt', 'log.txt', 'log.txt.old', '.DS_Store'}
+skip = {'settings.txt', 'queue.txt', 'searches.txt', 'channels.txt', 'log.txt', 'log.txt.old', 'update-failed.txt', '.DS_Store'}
 lines = ['archivetv-update 1', 'version ' + version,
          'base https://raw.githubusercontent.com/mroxfordyazuka/ArchiveTV/%s/App/ArchiveTV/' % commit]
 total = 0

@@ -2835,7 +2835,7 @@ static int crc_file(const char *path, unsigned *crc, long long *size) {
 static int upd_path_ok(const char *p) {
     if (!p[0] || p[0] == '/' || strstr(p, "..")) return 0;
     for (const char *c = p; *c; c++) if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == '.' || *c == '_' || *c == '-' || *c == '/')) return 0;
-    static const char *const MINE[] = { "settings.txt", "queue.txt", "searches.txt", "channels.txt", "log.txt", "log.txt.old", "music/music.raw", 0 };
+    static const char *const MINE[] = { "settings.txt", "queue.txt", "searches.txt", "channels.txt", "log.txt", "log.txt.old", "music/music.raw", "update-failed.txt", 0 };
     for (int i = 0; MINE[i]; i++) if (!strcmp(p, MINE[i])) return 0;
     if (!strncmp(p, "videos/", 7) || !strncmp(p, "playlists/", 10) || !strncmp(p, "update/", 7)) return 0;
     return 1;
@@ -2872,8 +2872,20 @@ static void rm_rf(const char *path) {
     if (p > 0) waitpid(p, 0, 0);
 }
 /* at launch: fetch update.txt quietly in the background; upd_poll looks at it later */
+static char upd_bad[16];          /* a version that was installed but didn't start, and was put back */
 static void upd_start_check(void) {
-    char p[760]; upd_path(p, sizeof p, "ready"); upd_ready = access(p, F_OK) == 0;
+    char p[760];
+    /* launch.sh just installed an update, and here we are: it works. Keep it (drop the backup of the old files).
+       Every version must do this, or launch.sh puts the old one back when it closes. */
+    upd_path(p, sizeof p, "trial");
+    if (access(p, F_OK) == 0) {
+        upd_path(p, sizeof p, ""); rm_rf(p);
+        snprintf(p, sizeof p, "%s/update-failed.txt", appdir); unlink(p);
+        logf_("update: now running %s, keeping it", app_version());
+    }
+    snprintf(p, sizeof p, "%s/update-failed.txt", appdir);
+    { FILE *f = fopen(p, "r"); if (f) { if (fgets(upd_bad, sizeof upd_bad, f)) upd_bad[strcspn(upd_bad, "\r\n ")] = 0; fclose(f); } }
+    upd_path(p, sizeof p, "ready"); upd_ready = access(p, F_OK) == 0;
     const char *v = getenv("VERIFY");
     if (!has_wifi || (v && !strcmp(v, "0")) || access(CURL_BIN, F_OK) != 0) return;
     upd_path(p, sizeof p, ""); mkdir(p, 0755);
@@ -2901,7 +2913,8 @@ static void upd_poll(void) {
         else if (!strncmp(line, "version ", 8)) snprintf(v, sizeof v, "%s", line + 8);
     }
     fclose(f); unlink(p);
-    if (head && v[0] && ver_cmp(v, app_version()) > 0) { snprintf(upd_new, sizeof upd_new, "%s", v); logf_("update check: %s is out (have %s)", v, app_version()); }
+    if (head && v[0] && !strcmp(v, upd_bad)) logf_("update check: %s is out, but it didn't start here before", v);
+    else if (head && v[0] && ver_cmp(v, app_version()) > 0) { snprintf(upd_new, sizeof upd_new, "%s", v); logf_("update check: %s is out (have %s)", v, app_version()); }
     else logf_("update check: up to date (%s)", app_version());
 }
 static const char *upd_note(void) {   /* once per run: the toast that tells about a new version */
@@ -2975,6 +2988,10 @@ static void app_update(void) {
         char l2[48]; snprintf(l2, sizeof l2, "ArchiveTV %s", app_version());
         sfx(SFX_SELECT); ask("Up to date", "You have the newest version.", l2, MOOD_HAPPY, "A:OK");
         return;
+    }
+    if (!strcmp(ver, upd_bad)) {
+        char l1[48]; snprintf(l1, sizeof l1, "Version %s didn't start here,", ver);
+        if (ask("Update", l1, "so it was undone. Try again?", MOOD_SAD, "A:Try again  B:Not now") != K_A) { sfx(SFX_BACK); return; }
     }
     snprintf(upd_new, sizeof upd_new, "%s", ver);
     message_m("Updates", "Comparing files...", 0, MOOD_STATIC, 0);
