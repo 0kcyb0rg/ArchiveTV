@@ -5,6 +5,7 @@
    Usage: archivetv <app_dir> [rotate_180 0|1] */
 #include "sys.h"
 #include "ui.h"
+#include "version.h"
 
 #define WMAX 1024
 #define HMAX 768
@@ -215,6 +216,9 @@ static int g_theme = 1;   /* Night is the default */
 static void settings_save(int tab);
 static void queue_badge(char *b, size_t cap);
 static void queue_tick(void);
+static int g_exit_code = 0;   /* 42 = launch.sh installs a downloaded update and starts the app again */
+static void upd_poll(void);
+static const char *upd_note(void);
 static int g_quit = 0;   /* set once the user says yes to "Turn off ArchiveTV?": every screen backs out */
 static void autooff_check(void);
 static int quit_ask(void);
@@ -224,7 +228,7 @@ static int list_loop_t(const char *title, int n, LabelFn fn, const char *footer,
     autooff_check();
     if (g_quit) return K_MENU;
     int bheld = 0; double xdown = 0, mpause = 0; double moff = 0, tlast = now_s();   /* moff = ms of title scrolling; holding X runs it faster */
-    const char *theme_msg = 0; double theme_t = 0;
+    const char *theme_msg = 0; double theme_t = 0, note_t = -100; const char *note = 0;
     if (*sel >= n) *sel = n ? n - 1 : 0;
     if (*sel < 0) *sel = 0;
     int top = *sel - UVIS / 2; if (top < 0) top = 0;
@@ -299,13 +303,15 @@ static int list_loop_t(const char *title, int n, LabelFn fn, const char *footer,
             rows_v[i].main = mains[i]; rows_v[i].side = sides[i]; rows_v[i].tone = tone;
         }
         char cnt[32]; snprintf(cnt, sizeof cnt, "%d/%d", n ? *sel + 1 : 0, n);
-        { static double lq = 0; if (t - lq > 0.3) { lq = t; queue_tick(); autooff_check(); if (g_quit) { SDL_EnableKeyRepeat(0, 0); return K_MENU; } } }
+        { static double lq = 0; if (t - lq > 0.3) { lq = t; queue_tick(); autooff_check(); upd_poll(); if (g_quit) { SDL_EnableKeyRepeat(0, 0); return K_MENU; } } }
+        if (tab >= 0 && !note) { note = upd_note(); if (note) note_t = t; }
         char qb[24]; queue_badge(qb, sizeof qb); ui_footer_badge(qb);
         ui_bg(t);
         if (tab >= 0) ui_header_tabs(TABS, 6, tab, 0, t);
         else ui_header(title, cnt, t, MOOD_HAPPY);
         (void)tsel; ui_list(rows_v, n, *sel, top, (int)moff, t, empty);
         if (theme_msg && t - theme_t < 1.5) ui_toast(theme_msg);
+        else if (note && t - note_t < 4) ui_toast(note);
         else if (status && *status && **status) ui_toast(*status);
         ui_footer(footer);
         present(back);
@@ -2772,6 +2778,247 @@ static void screen_playlist(const char *name) {
     }
 }
 
+/* ---------------- updating the app itself ----------------
+   update.txt on the miyoo-builds branch names the newest version and, for every file of the app, its CRC-32 and
+   size, plus one fixed commit of that branch to take the files from:
+       archivetv-update 1
+       version 1.5
+       base https://raw.githubusercontent.com/mroxfordyazuka/ArchiveTV/<commit>/App/ArchiveTV/
+       file 1a2b3c4d 160628 archivetv
+   Only the files that differ from the ones on the card are downloaded, into update/files/. Each is checked, and
+   only when all are good are update/list and update/ready written. launch.sh moves them into place after the app
+   has closed (a running program can't replace itself); exit code 42 makes it start the app again right away.
+   Videos, playlists, saved shows, the queue and settings are never part of an update. */
+#define UPD_URL  "https://raw.githubusercontent.com/mroxfordyazuka/ArchiveTV/miyoo-builds/update.txt"
+#define UPD_BASE "https://raw.githubusercontent.com/mroxfordyazuka/ArchiveTV/"
+#define UPD_MAX 80
+typedef struct { unsigned crc; long long size; char path[120]; int need; } UFile;
+static char upd_new[16];          /* a newer version we know is out, or "" */
+static int upd_ready = 0;         /* an update is downloaded and waits for a restart */
+static pid_t upd_pid = 0;         /* the quiet check started at launch */
+static int upd_noted = 0;
+static const char *upd_url(void) { const char *u = getenv("ATV_UPDATE_URL"); return u && u[0] ? u : UPD_URL; }   /* for testing */
+static void upd_path(char *d, size_t cap, const char *rel) { snprintf(d, cap, "%s/update%s%s", appdir, rel[0] ? "/" : "", rel); }
+static const char *app_version(void) {
+    static char v[16] = "";
+    if (v[0]) return v;
+    snprintf(v, sizeof v, "%s", APP_VERSION);
+    char p[760]; upd_path(p, sizeof p, "pretend-version");   /* testing: act like an older version */
+    FILE *f = fopen(p, "r");
+    if (f) { char b[16]; if (fgets(b, sizeof b, f)) { b[strcspn(b, "\r\n ")] = 0; if (b[0]) snprintf(v, sizeof v, "%s", b); } fclose(f); }
+    return v;
+}
+static int ver_cmp(const char *a, const char *b) {
+    for (int i = 0; i < 4; i++) {
+        long x = strtol(a, (char **)&a, 10), y = strtol(b, (char **)&b, 10);
+        if (x != y) return x < y ? -1 : 1;
+        if (*a == '.') a++;
+        if (*b == '.') b++;
+    }
+    return 0;
+}
+static unsigned crc_tab[256];
+static unsigned crc32_buf(unsigned c, const unsigned char *p, size_t n) {
+    if (!crc_tab[1]) for (unsigned i = 0; i < 256; i++) { unsigned r = i; for (int k = 0; k < 8; k++) r = r & 1 ? 0xEDB88320u ^ (r >> 1) : r >> 1; crc_tab[i] = r; }
+    c = ~c;
+    while (n--) c = crc_tab[(c ^ *p++) & 255] ^ (c >> 8);
+    return ~c;
+}
+static int crc_file(const char *path, unsigned *crc, long long *size) {
+    FILE *f = fopen(path, "rb"); if (!f) return -1;
+    static unsigned char buf[65536]; unsigned c = 0; long long n = 0; size_t k;
+    while ((k = fread(buf, 1, sizeof buf, f)) > 0) { c = crc32_buf(c, buf, k); n += (long long)k; }
+    fclose(f); *crc = c; *size = n;
+    return 0;
+}
+/* files of the user's own that an update may never write, whatever the list says */
+static int upd_path_ok(const char *p) {
+    if (!p[0] || p[0] == '/' || strstr(p, "..")) return 0;
+    for (const char *c = p; *c; c++) if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == '.' || *c == '_' || *c == '-' || *c == '/')) return 0;
+    static const char *const MINE[] = { "settings.txt", "queue.txt", "searches.txt", "channels.txt", "log.txt", "log.txt.old", "music/music.raw", 0 };
+    for (int i = 0; MINE[i]; i++) if (!strcmp(p, MINE[i])) return 0;
+    if (!strncmp(p, "videos/", 7) || !strncmp(p, "playlists/", 10) || !strncmp(p, "update/", 7)) return 0;
+    return 1;
+}
+/* reads update.txt; returns the number of files, or -1 when it isn't a list we trust */
+static int upd_parse(char *txt, char *ver, size_t vc, char *base, size_t bc, UFile *F) {
+    int n = 0, head = 0; ver[0] = base[0] = 0;
+    int test = getenv("ATV_UPDATE_URL") && getenv("ATV_UPDATE_URL")[0];
+    for (char *line = txt; line && *line; ) {
+        char *nl = strchr(line, '\n'); if (nl) *nl = 0;
+        line[strcspn(line, "\r")] = 0;
+        if (!strcmp(line, "archivetv-update 1")) head = 1;
+        else if (!strncmp(line, "version ", 8)) snprintf(ver, vc, "%s", line + 8);
+        else if (!strncmp(line, "base ", 5)) snprintf(base, bc, "%s", line + 5);
+        else if (!strncmp(line, "file ", 5) && n < UPD_MAX) {
+            char *e; unsigned crc = (unsigned)strtoll(line + 5, &e, 16); long long sz = strtoll(e, &e, 10);
+            while (*e == ' ') e++;
+            if (sz < 0 || !upd_path_ok(e) || strlen(e) >= sizeof F[0].path) { logf_("update: refusing file line '%s'", line); return -1; }
+            F[n].crc = crc; F[n].size = sz; F[n].need = 0; snprintf(F[n].path, sizeof F[n].path, "%s", e); n++;
+        }
+        line = nl ? nl + 1 : 0;
+    }
+    if (!head || !ver[0] || !base[0] || !n) { logf_("update: list is incomplete"); return -1; }
+    if (!test && strncmp(base, UPD_BASE, strlen(UPD_BASE))) { logf_("update: base %s is not ours", base); return -1; }
+    return n;
+}
+static void mkdirs(const char *path) {   /* makes the folders a file path needs */
+    char d[900]; snprintf(d, sizeof d, "%s", path);
+    for (char *c = d + 1; *c; c++) if (*c == '/') { *c = 0; mkdir(d, 0755); *c = '/'; }
+}
+static void rm_rf(const char *path) {
+    pid_t p = fork();
+    if (p == 0) { execl("/bin/rm", "rm", "-rf", path, (char *)0); _exit(127); }
+    if (p > 0) waitpid(p, 0, 0);
+}
+/* at launch: fetch update.txt quietly in the background; upd_poll looks at it later */
+static void upd_start_check(void) {
+    char p[760]; upd_path(p, sizeof p, "ready"); upd_ready = access(p, F_OK) == 0;
+    const char *v = getenv("VERIFY");
+    if (!has_wifi || (v && !strcmp(v, "0")) || access(CURL_BIN, F_OK) != 0) return;
+    upd_path(p, sizeof p, ""); mkdir(p, 0755);
+    static char cmd[3000]; char out[800], qo[900], qu[600], tls[900];
+    upd_path(out, sizeof out, "latest.txt"); unlink(out);
+    shq(qo, sizeof qo, out); shq(qu, sizeof qu, upd_url()); curl_tls(tls, sizeof tls);
+    snprintf(cmd, sizeof cmd, "%s exec %s -sSL --fail --connect-timeout 15 --max-time 40 -A ArchiveTV-Miyoo %s -o %s %s",
+             CURL_ENV, CURL_BIN, tls, qo, qu);
+    pid_t pid = fork();
+    if (pid == 0) { int nul = open("/dev/null", 1); if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); } execl("/bin/sh", "sh", "-c", cmd, (char *)0); _exit(127); }
+    if (pid > 0) upd_pid = pid;
+}
+static void upd_poll(void) {
+    if (upd_pid <= 0) return;
+    int st = 0;
+    if (waitpid(upd_pid, &st, WNOHANG) != upd_pid) return;
+    upd_pid = 0;
+    if ((st & 0x7f) || ((st >> 8) & 255)) { logf_("update check: no answer (curl %d)", (st >> 8) & 255); return; }
+    char p[760]; upd_path(p, sizeof p, "latest.txt");
+    FILE *f = fopen(p, "r"); if (!f) return;
+    char line[200], v[16] = ""; int head = 0;
+    for (int i = 0; i < 4 && fgets(line, sizeof line, f); i++) {
+        line[strcspn(line, "\r\n")] = 0;
+        if (!strcmp(line, "archivetv-update 1")) head = 1;
+        else if (!strncmp(line, "version ", 8)) snprintf(v, sizeof v, "%s", line + 8);
+    }
+    fclose(f); unlink(p);
+    if (head && v[0] && ver_cmp(v, app_version()) > 0) { snprintf(upd_new, sizeof upd_new, "%s", v); logf_("update check: %s is out (have %s)", v, app_version()); }
+    else logf_("update check: up to date (%s)", app_version());
+}
+static const char *upd_note(void) {   /* once per run: the toast that tells about a new version */
+    if (upd_noted || !upd_new[0] || upd_ready) return 0;
+    upd_noted = 1;
+    static char m[64]; snprintf(m, sizeof m, "Version %s is out: see Settings", upd_new);
+    return m;
+}
+/* downloads one file of the update, resuming a half-finished one. 1 = good, 0 = failed, -1 = cancelled */
+static int upd_fetch(const char *base, UFile *u, long long done, long long total, int idx, int count, const char *ver) {
+    char dst[900], rel[200], url[600]; snprintf(rel, sizeof rel, "files/%s", u->path); upd_path(dst, sizeof dst, rel);
+    snprintf(url, sizeof url, "%s%s", base, u->path);
+    mkdirs(dst);
+    if (u->size == 0) { FILE *z = fopen(dst, "wb"); if (!z) return 0; fclose(z); return 1; }   /* an empty marker file */
+    unsigned c; long long sz;
+    if (crc_file(dst, &c, &sz) == 0) {
+        if (sz == u->size && c == u->crc) return 1;    /* already here from an earlier try */
+        if (sz >= u->size) unlink(dst);                  /* damaged: start that one again */
+    }
+    static char cmd[3200]; char qd[1000], qu[700], tls[900];
+    shq(qd, sizeof qd, dst); shq(qu, sizeof qu, url); curl_tls(tls, sizeof tls);
+    snprintf(cmd, sizeof cmd, "%s exec %s -sSL --fail -C - --retry 3 --retry-delay 2 --connect-timeout 20 --speed-limit 1 --speed-time 60 -A ArchiveTV-Miyoo %s -o %s %s",
+             CURL_ENV, CURL_BIN, tls, qd, qu);
+    pid_t pid = fork();
+    if (pid == 0) { execl("/bin/sh", "sh", "-c", cmd, (char *)0); _exit(127); }
+    if (pid < 0) return 0;
+    char name[64]; snprintf(name, sizeof name, "ArchiveTV %s (%d of %d)", ver, idx + 1, count);
+    double t0 = now_s(), tl = 0, rate = 0; long long g0 = 0; int cancel = 0, st = 0;
+    for (;;) {
+        pid_t r = waitpid(pid, &st, WNOHANG);
+        long long have = file_size(dst); if (have < 0) have = 0;
+        long long got = done + have;
+        double t = now_s();
+        if (t - tl > 0.25) { if (tl > 0) { double inst = (got - g0) / (t - tl); rate = rate > 0 ? rate * 0.8 + inst * 0.2 : inst; } g0 = got; tl = t; }
+        if (r == pid) break;
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) if (e.type == SDL_KEYDOWN && (e.key.keysym.sym == K_B || e.key.keysym.sym == K_MENU)) cancel = 1;
+        if (cancel) { kill(pid, SIGTERM); waitpid(pid, &st, 0); return -1; }   /* what's here so far is kept, to resume */
+        char eta[24] = ""; if (rate > 0) fmt_time(eta, sizeof eta, (total - got) / rate);
+        ui_download(name, got, total, t - t0 > 1 ? rate : 0, eta, 0, t, "B:Stop");
+        present(back);
+        usleep(40000);
+    }
+    int code = (st & 0x7f) ? -1 : ((st >> 8) & 255);
+    if (crc_file(dst, &c, &sz) != 0 || sz != u->size || c != u->crc) {
+        logf_("update: %s came down wrong (curl %d, %lld of %lld bytes, crc %08x want %08x)", u->path, code, sz, u->size, c, u->crc);
+        if (sz >= u->size) unlink(dst);
+        return 0;
+    }
+    return 1;
+}
+static void app_update(void) {
+    if (upd_ready) {
+        int k = ask("Update ready", "Restart to finish updating.", "Videos and settings are kept.", MOOD_HAPPY, "A:Restart now  B:Later");
+        if (k == K_A) { g_exit_code = 42; g_quit = 1; }
+        return;
+    }
+    if (!has_wifi) { error_box("No Wi-Fi on this Miyoo.", "Updating needs the internet."); return; }
+    const char *vf = getenv("VERIFY");
+    if (vf && !strcmp(vf, "0")) { error_box("The clock is wrong.", "Set the date, then try again."); return; }
+    message("Updates", "Looking for a new version...", 0, "B:Cancel");
+    int err = 0; char *txt = http_get(upd_url(), &err);
+    LM.on = 0;
+    if (!txt) { if (err != -5) error_box("Could not check for updates.", err == -6 ? "curl is missing." : "Is Wi-Fi on?"); return; }
+    static UFile F[UPD_MAX]; char ver[16], base[400];
+    int n = upd_parse(txt, ver, sizeof ver, base, sizeof base, F);
+    free(txt);
+    if (n < 0) { error_box("The update list looks wrong.", "Try again later."); return; }
+    if (ver_cmp(ver, app_version()) <= 0) {
+        upd_new[0] = 0;
+        char l2[48]; snprintf(l2, sizeof l2, "ArchiveTV %s", app_version());
+        sfx(SFX_SELECT); ask("Up to date", "You have the newest version.", l2, MOOD_HAPPY, "A:OK");
+        return;
+    }
+    snprintf(upd_new, sizeof upd_new, "%s", ver);
+    message_m("Updates", "Comparing files...", 0, MOOD_STATIC, 0);
+    int need = 0; long long total = 0;
+    for (int i = 0; i < n; i++) {
+        char p[900]; snprintf(p, sizeof p, "%s/%s", appdir, F[i].path);
+        unsigned c; long long sz;
+        F[i].need = !(crc_file(p, &c, &sz) == 0 && sz == F[i].size && c == F[i].crc);
+        if (F[i].need) { need++; total += F[i].size; }
+    }
+    char l1[80], l2[80], szs[16]; fmt_size(szs, sizeof szs, total);
+    snprintf(l1, sizeof l1, "ArchiveTV %s is out!", ver);
+    snprintf(l2, sizeof l2, "Download %d file%s (%s)?", need, need == 1 ? "" : "s", szs);
+    sfx(SFX_SELECT);
+    if (ask("Update", l1, l2, MOOD_WOW, "A:Update  B:Not now") != K_A) { sfx(SFX_BACK); return; }
+    /* files left from a download of some other version must not get mixed in */
+    char dir[800], mark[800]; upd_path(dir, sizeof dir, "files"); upd_path(mark, sizeof mark, "for");
+    { char was[16] = ""; FILE *m = fopen(mark, "r"); if (m) { if (!fgets(was, sizeof was, m)) was[0] = 0; fclose(m); was[strcspn(was, "\r\n")] = 0; }
+      if (strcmp(was, ver)) { rm_rf(dir); m = fopen(mark, "w"); if (m) { fprintf(m, "%s\n", ver); fclose(m); } } }
+    mkdir(dir, 0755);
+    long long done = 0; int idx = 0;
+    for (int i = 0; i < n; i++) {
+        if (!F[i].need) continue;
+        int r = upd_fetch(base, &F[i], done, total, idx, need, ver);
+        if (r < 0) { sfx(SFX_BACK); ask("Update paused", "It picks up where it left off", "next time you choose Update.", MOOD_SLEEP, "A:OK"); return; }
+        if (r == 0) { error_box("A file didn't download right.", "Try again to resume it."); return; }
+        done += F[i].size; idx++;
+    }
+    char lp[800]; upd_path(lp, sizeof lp, "list.tmp");
+    FILE *L = fopen(lp, "w");
+    if (!L) { error_box("Could not write to the SD card.", 0); return; }
+    for (int i = 0; i < n; i++) if (F[i].need) fprintf(L, "%s\n", F[i].path);
+    fclose(L);
+    char lf[800]; upd_path(lf, sizeof lf, "list"); rename(lp, lf);
+    char rp[800]; upd_path(rp, sizeof rp, "ready");
+    FILE *R = fopen(rp, "w"); if (R) { fprintf(R, "%s\n", ver); fclose(R); }
+    sync();
+    upd_ready = 1;
+    logf_("update: %s downloaded (%d files, %lld bytes), waiting for launch.sh", ver, need, total);
+    sfx(SFX_HELLO);
+    int k = ask("Update ready", "Restart to finish updating.", "Videos and settings are kept.", MOOD_HAPPY, "A:Restart now  B:Later");
+    if (k == K_A) { g_exit_code = 42; g_quit = 1; }
+}
+
 /* ---------- settings + about ---------- */
 static void lbl_tab_settings(int i, char *m, size_t mc, char *s, size_t sc, int *tone) {
     switch (i) {
@@ -2782,6 +3029,10 @@ static void lbl_tab_settings(int i, char *m, size_t mc, char *s, size_t sc, int 
     case 4: snprintf(m, mc, "Vsync (no tearing)"); snprintf(s, sc, "%s", g_vsync ? "On" : "Off"); break;
     case 5: snprintf(m, mc, "Group episodes of a show"); snprintf(s, sc, "%s", g_group ? "On" : "Off"); break;
     case 6: snprintf(m, mc, "Turn off after downloads"); snprintf(s, sc, "%s", g_autooff ? "On" : "Off"); break;
+    case 7: upd_poll(); snprintf(m, mc, "Update ArchiveTV...");
+            if (upd_ready) { snprintf(s, sc, "Restart to finish"); *tone = 1; }
+            else if (upd_new[0]) { snprintf(s, sc, "%s is out!", upd_new); *tone = 1; }
+            else snprintf(s, sc, "v%s", app_version()); break;
     default: snprintf(m, mc, "About ArchiveTV"); *tone = 4; break;
     }
 }
@@ -2810,6 +3061,7 @@ static void settings_action(int i) {
     }
     case 5: g_group = !g_group; break;
     case 6: g_autooff = !g_autooff; g_off_armed = 0; break;
+    case 7: app_update(); return;
     default: screen_about(); return;
     }
     sfx(SFX_TOGGLE);
@@ -2823,7 +3075,7 @@ static int tab_count(int tab) {
     case 2: return nchan;
     case 3: return npl + 1;
     case 4: return nq + npart + ndf;
-    default: return 8;
+    default: return 9;
     }
 }
 static const char *FOOT[6] = {
@@ -3016,6 +3268,8 @@ int main(int argc, char **argv) {
     fx_load(g_fx);
     av_log_set_level(16);
     av_register_all();
+    ui_app_version = app_version();
+    upd_start_check();
 
     static const char *SAY[] = {
         "Let's watch old TV!", "Old TV was better, right?", "Hey, let's go back in time!",
@@ -3054,6 +3308,6 @@ int main(int argc, char **argv) {
     dl_reap(&DLQ); dl_reap(&DLW);
     menu_audio_stop();
     SDL_Quit();
-    logf_("bye");
-    return 0;
+    logf_("bye%s", g_exit_code == 42 ? " (restarting to update)" : "");
+    return g_exit_code;
 }

@@ -23,7 +23,7 @@ HOME TABS (L1 / R1 or L2 / R2 to switch)
   Lists   - your playlists
   Files   - the download queue, paused downloads, then the videos on your card
   (gear)  - Settings: music, menu sounds, scanlines, theme, vsync,
-            group episodes, turn off after downloads, About
+            group episodes, turn off after downloads, Update, About
 
 BUTTONS
   D-pad move      LEFT/RIGHT page      A open / menu      B back
@@ -44,6 +44,13 @@ SHOWS AND SERIES
 TURN OFF AFTER DOWNLOADS (Settings, off by default)
   Queue up a bunch of videos and when the last one is done, ArchiveTV counts
   down 30 seconds and powers the handheld off. B keeps it on.
+
+UPDATES (Settings > Update ArchiveTV, needs Wi-Fi)
+  At start ArchiveTV quietly checks for a new version and says so at the bottom
+  of the screen. Update downloads only the files that changed (B stops; it picks
+  up where it left off), checks every one, then restarts into the new version.
+  Videos, playlists, saved shows, the queue and settings are never touched.
+  It won't update if the clock is wrong (certificates can't be checked then).
 
 A VIDEO (press A on a file)
   Watch now              starts playing once a little is downloaded (the bar shows where),

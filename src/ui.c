@@ -611,9 +611,10 @@ void ui_hello(const char *say, int shown, const char *hints, double t) {
     ui_footer(hints);
 }
 
+const char *ui_app_version = "";
 void ui_about(double t) {
     ui_bg(t);
-    ui_header("About", "v1.0", t, MOOD_HAPPY);
+    { char v[24] = ""; if (ui_app_version && ui_app_version[0]) snprintf(v, sizeof v, "v%s", ui_app_version); ui_header("About", v, t, MOOD_HAPPY); }
     B = T;
     int y0 = 40 + OY;
     win(12, y0, UW - 24, 168, WHITE);

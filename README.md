@@ -32,6 +32,9 @@ Download `ArchiveTV-vX.Y.zip` from [Releases](../../releases), copy its `App` fo
 root of your SD card (merge folders), and open **ArchiveTV** from Apps.
 It's also listed in [Mixtape](https://github.com/snyderman3000/mixtape).
 
+From 1.4 on it can update itself: **Settings › Update ArchiveTV** (needs Wi-Fi). Only the changed
+files are downloaded, each one is checked, and your videos, playlists and settings are never touched.
+
 ## Controls
 
 | Button | Menus | Playing |
@@ -65,6 +68,18 @@ cp build/archivetv App/ArchiveTV/
 For systems without curl (sprigUI) the release zip also carries a static curl in `App/ArchiveTV/bin`
 (the same build spruceOS ships in `spruce/bin/curl`).
 The toolchain is the [pre-built Miyoo Mini toolchain](https://github.com/shauninman/miyoomini-toolchain-buildroot/releases).
+
+### Releasing an update
+
+The app's updater reads `update.txt` on the `miyoo-builds` branch: the version, plus each file's CRC-32
+and size, taken from one fixed commit of that branch. Bump `src/version.h`, build, put together the full
+`App/ArchiveTV` folder (with `archivetv`, `libs/` and `bin/curl`), then
+
+```sh
+tools/publish-update.sh path/to/App/ArchiveTV
+```
+
+That push reaches every 1.4+ install at its next start, so do it together with the GitHub release.
 
 ## Credits
 
