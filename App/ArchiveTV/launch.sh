@@ -22,35 +22,53 @@ GOV=$(cat "$GOVF" 2>/dev/null)
 echo performance > "$GOVF" 2>/dev/null
 touch /tmp/stay_awake    # Onion: no auto-sleep while watching
 
+# ---- updates (Settings > Update ArchiveTV) ----
+# The app downloads and checks every file into update/files, then writes update/list and update/ready.
+# Here, before the app starts, they are moved into place; the files they replace go to update/backup and
+# update/ready becomes update/trial. A new version that starts properly deletes update/ (see upd_start_check
+# in src/atv.c). If update/trial is still there when the app has closed, the new version never got going:
+# the old files are put back and the old version starts instead.
+U="$APPDIR/update"
+install_update() {
+    echo "installing update $(cat "$U/ready")" >> "$LOG"
+    OK=1
+    while IFS= read -r F; do
+        [ -n "$F" ] || continue
+        case "$F" in /*|*..*) continue ;; esac
+        [ -f "$U/files/$F" ] || continue      # moved in already, by an install that was cut short
+        mkdir -p "$(dirname "$APPDIR/$F")" "$(dirname "$U/backup/$F")"
+        if [ -f "$APPDIR/$F" ] && [ ! -f "$U/backup/$F" ]; then mv -f "$APPDIR/$F" "$U/backup/$F" || OK=0; fi
+        mv -f "$U/files/$F" "$APPDIR/$F" || { echo "update: could not move $F" >> "$LOG"; OK=0; }
+        [ "$F" = music/music.ogg ] && rm -f "$APPDIR/music/music.raw"    # unpacked again from the new song
+    done < "$U/list"
+    chmod +x "$APPDIR/archivetv" "$APPDIR/bin/curl" "$APPDIR/launch.sh" 2>/dev/null
+    mv -f "$U/ready" "$U/trial"
+    sync
+    [ "$OK" = 1 ] || { echo "update: install failed" >> "$LOG"; roll_back; }
+}
+roll_back() {
+    echo "update: putting the old version back" >> "$LOG"
+    while IFS= read -r F; do
+        [ -n "$F" ] || continue
+        case "$F" in /*|*..*) continue ;; esac
+        if [ -f "$U/backup/$F" ]; then mv -f "$U/backup/$F" "$APPDIR/$F"; else rm -f "$APPDIR/$F"; fi    # no backup = a new file
+    done < "$U/list"
+    chmod +x "$APPDIR/archivetv" "$APPDIR/bin/curl" "$APPDIR/launch.sh" 2>/dev/null
+    head -n 1 "$U/trial" > "$APPDIR/update-failed.txt" 2>/dev/null    # the app won't offer this version again unasked
+    rm -rf "$U"
+    sync
+}
+if [ -f "$U/ready" ] && [ -f "$U/list" ]; then install_update; fi
+
 "$APPDIR/archivetv" "$APPDIR" "$ROTATE" >> "$LOG" 2>&1
 CODE=$?
 echo "exit code $CODE" >> "$LOG"
 
 rm -f /tmp/stay_awake
 [ -n "$GOV" ] && echo "$GOV" > "$GOVF" 2>/dev/null
-
-# An update the app downloaded (Settings > Update ArchiveTV): every file in update/files was checked by the app
-# before it wrote update/ready. Move them into place now that the app has closed.
-U="$APPDIR/update"
-if [ -f "$U/ready" ] && [ -f "$U/list" ]; then
-    echo "installing update $(cat "$U/ready")" >> "$LOG"
-    OK=1
-    while IFS= read -r F; do
-        [ -n "$F" ] || continue
-        case "$F" in /*|*..*) continue ;; esac
-        if [ -f "$U/files/$F" ]; then
-            mkdir -p "$(dirname "$APPDIR/$F")"
-            mv -f "$U/files/$F" "$APPDIR/$F" || { echo "update: could not move $F" >> "$LOG"; OK=0; }
-            [ "$F" = music/music.ogg ] && rm -f "$APPDIR/music/music.raw"    # unpacked again from the new song
-        else
-            echo "update: $F is missing" >> "$LOG"; OK=0
-        fi
-    done < "$U/list"
-    chmod +x "$APPDIR/archivetv" "$APPDIR/bin/curl" "$APPDIR/launch.sh" 2>/dev/null
-    if [ "$OK" = 1 ]; then rm -rf "$U"; echo "update installed" >> "$LOG"; else rm -f "$U/ready" "$U/list"; fi
-fi
+if [ -f "$U/trial" ]; then echo "update: the new version did not start" >> "$LOG"; roll_back; CODE=42; fi
 sync
-# 42 = the app asked to be started again (to finish an update): the new launch.sh takes over
+# 42 = start again: the app asked for it to install an update, or an update was just undone
 if [ "$CODE" = 42 ]; then exec /bin/sh "$APPDIR/launch.sh"; fi
 exit 0
 }
