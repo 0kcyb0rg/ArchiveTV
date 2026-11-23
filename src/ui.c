@@ -672,7 +672,7 @@ void ui_tv_idle(const char *say, double t) {
     for (int y = 0; y < RH; y += 2) {
         uint32_t *row = T + y * RW;
         for (int x = 0; x < RW; x += 2) {
-            unsigned v = rnd() & 255; v = 30 + (v * v >> 9);          /* mostly dark grey snow, some bright flecks */
+            unsigned v = rnd() & 255; v = 8 + (v * v * v >> 18);     /* dark snow, a few brighter flecks */
             uint32_t c = (v << 16) | (v << 8) | (v < 250 ? v + 4 : v);
             row[x] = row[x + 1] = c;
             if (y + 1 < RH) row[RW + x] = row[RW + x + 1] = c;
@@ -681,7 +681,7 @@ void ui_tv_idle(const char *say, double t) {
     for (int k = 0; k < 3; k++) {   /* a few rolling bright bars, like a lost signal */
         int by = (int)((t * 23 + k * 97) * 1.0) % UH;
         for (int y = by; y < by + 2 && y < UH; y++) for (int x = 0; x < UW; x++) {
-            uint32_t *p = T + (y * 2) * RW + x * 2; uint32_t c = *p, r = ((c >> 16) & 255) + 40; if (r > 255) r = 255;
+            uint32_t *p = T + (y * 2) * RW + x * 2; uint32_t c = *p, r = ((c >> 16) & 255) + 22; if (r > 255) r = 255;
             p[0] = p[1] = p[RW] = p[RW + 1] = (r << 16) | (r << 8) | r;
         }
     }
