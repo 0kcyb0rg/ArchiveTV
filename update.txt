@@ -1,14 +1,14 @@
 archivetv-update 1
 version 1.4
-base https://raw.githubusercontent.com/mroxfordyazuka/ArchiveTV/a7096580d40d0453fb87a0e7494fb5771d990005/App/ArchiveTV/
+base https://raw.githubusercontent.com/mroxfordyazuka/ArchiveTV/edc5eec3657bff1ffb238a61fffa70c179bba906/App/ArchiveTV/
 file 3f125a4f 4654 README.txt
-file e86cdeff 177112 archivetv
+file 7705c8af 178024 archivetv
 file f97aee3d 224606 cacert.pem
 file 75cb0707 257 config.json
 file 00000000 0 full_resolution
 file d62a288f 8728 guide.txt
 file 70faa475 6401 icon.png
-file 354adda3 2682 launch.sh
+file ae679b46 3842 launch.sh
 file 464046ba 4687052 bin/curl
 file 1539ca67 3157796 libs/libavcodec.so.56
 file 27fa45cf 410188 libs/libavformat.so.56
