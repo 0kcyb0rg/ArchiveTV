@@ -10,9 +10,10 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 [ -f "$PKG/archivetv" ] && [ -d "$PKG/libs" ] || { echo "not a full App/ArchiveTV folder: $PKG"; exit 1; }
 W=$(mktemp -d)
 cd "$ROOT"
-git fetch -q origin miyoo-builds 2>/dev/null || true
+git fetch -q origin +refs/heads/miyoo-builds:refs/remotes/origin/miyoo-builds 2>/dev/null || true
 if git rev-parse -q --verify origin/miyoo-builds >/dev/null; then
-    git worktree add -q -B miyoo-builds "$W" origin/miyoo-builds
+    git branch -q -D miyoo-builds 2>/dev/null || true
+    git worktree add -q -b miyoo-builds "$W" origin/miyoo-builds
 else
     git worktree add -q --detach "$W" && (cd "$W" && git checkout -q --orphan miyoo-builds && git rm -rqf . )
 fi
