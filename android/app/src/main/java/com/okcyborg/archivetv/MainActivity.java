@@ -13,7 +13,6 @@ import android.media.MediaPlayer;
 import android.media.SoundPool;
 import android.os.Bundle;
 import android.view.KeyEvent;
-import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.WindowManager;
@@ -25,9 +24,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /** ArchiveTV for Android handhelds: the Miyoo app's screens, drawn by the same C code. */
-public class MainActivity extends Activity implements SurfaceHolder.Callback {
+public class MainActivity extends Activity implements android.opengl.GLSurfaceView.Renderer {
     static MainActivity self;
-    SurfaceView view; android.widget.FrameLayout root; Tv tv;
+    android.opengl.GLSurfaceView view; android.widget.FrameLayout root; Tv tv; final Crt crt = new Crt(); int fx = 1; boolean curve = false;
+    final Rect drawMenu = new Rect(), drawTv = new Rect(); boolean drawIdle;
     /* screen split: where the menus and the TV go (screen pixels); mode 0 = menus only, 1 = TV left, 2 = TV on top */
     final Rect menuR = new Rect(), tvR = new Rect(); int mode = 0, sw = 1, sh = 1; boolean full = false;
     int[] tvPx; Bitmap tvBmp; static final int TVW = 640, TVH = 480;
@@ -51,8 +51,10 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON | WindowManager.LayoutParams.FLAG_FULLSCREEN);
         root = new android.widget.FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
-        view = new SurfaceView(this);
-        view.getHolder().addCallback(this);
+        view = new android.opengl.GLSurfaceView(this);
+        view.setEGLContextClientVersion(2);
+        view.setRenderer(this);
+        view.setRenderMode(android.opengl.GLSurfaceView.RENDERMODE_WHEN_DIRTY);
         view.setFocusable(true);
         root.addView(view, new android.widget.FrameLayout.LayoutParams(-1, -1));
         tv = new Tv(this);
@@ -61,7 +63,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         setContentView(root);
         prefs = getSharedPreferences("atv", MODE_PRIVATE);
         theme = prefs.getInt("theme", 0); music = prefs.getBoolean("music", true); sounds = prefs.getBoolean("sounds", true);
-        group = prefs.getBoolean("group", true); Keys.swapAB = prefs.getBoolean("swapab", false);
+        group = prefs.getBoolean("group", true); Keys.swapAB = prefs.getBoolean("swapab", false); fx = prefs.getInt("fx2", 1); curve = prefs.getBoolean("curve", false);
         pool = new SoundPool.Builder().setMaxStreams(4).setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_GAME).build()).build();
         try {
             sMove = pool.load(getAssets().openFd("sfx/move.wav"), 1); sSelect = pool.load(getAssets().openFd("sfx/select.wav"), 1);
@@ -72,13 +74,13 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         stack.push(new Hello());
     }
 
-    void save() { prefs.edit().putInt("theme", theme).putBoolean("music", music).putBoolean("sounds", sounds).putBoolean("group", group).putBoolean("swapab", Keys.swapAB).apply(); }
+    void save() { prefs.edit().putInt("theme", theme).putBoolean("music", music).putBoolean("sounds", sounds).putBoolean("group", group).putBoolean("swapab", Keys.swapAB).putInt("fx2", fx).putBoolean("curve", curve).apply(); }
     void sfx(int id) { if (sounds && id != 0) pool.play(id, 0.55f, 0.55f, 1, 0, 1f); }
 
     void musicOn(boolean on) { if (on && music && (tv == null || !tv.active())) bgm.start(this); else bgm.pause(); }
 
-    @Override protected void onResume() { super.onResume(); hideBars(); musicOn(true); }
-    @Override protected void onPause() { super.onPause(); musicOn(false); tv.saveSpot(); tv.pause(); }
+    @Override protected void onResume() { super.onResume(); view.onResume(); hideBars(); musicOn(true); }
+    @Override protected void onPause() { super.onPause(); view.onPause(); stopLoop(); musicOn(false); tv.saveSpot(); tv.pause(); }
     @Override protected void onDestroy() { super.onDestroy(); bgm.stop(); }
     void hideBars() {
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_FULLSCREEN
@@ -137,8 +139,9 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     }
     @Override public boolean onKeyUp(int code, KeyEvent e) { return Keys.map(code) != Keys.NONE || super.onKeyUp(code, e); }
 
-    @Override public void surfaceCreated(SurfaceHolder h) { }
-    @Override public void surfaceChanged(SurfaceHolder h, int fmt, int w, int hh) {
+    @Override public void onSurfaceCreated(javax.microedition.khronos.opengles.GL10 g, javax.microedition.khronos.egl.EGLConfig c) { crt.init(); }
+    @Override public void onSurfaceChanged(javax.microedition.khronos.opengles.GL10 g, int w, int hh) {
+        android.opengl.GLES20.glViewport(0, 0, w, hh);
         stopLoop();
         sw = w; sh = hh;
         synchronized (lock) { layout(); Native.setTheme(theme); }
@@ -176,11 +179,19 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         });
     }
     void setFull(boolean f) { full = f; placeTv(); }
-    @Override public void surfaceDestroyed(SurfaceHolder h) { stopLoop(); }
+    /** the GL thread: put the latest pictures on screen through the screen-effect shader */
+    @Override public void onDrawFrame(javax.microedition.khronos.opengles.GL10 g) {
+        android.opengl.GLES20.glClearColor(18 / 255f, 10 / 255f, 30 / 255f, 1f);
+        android.opengl.GLES20.glClear(android.opengl.GLES20.GL_COLOR_BUFFER_BIT);
+        synchronized (lock) {
+            if (bmp == null) return;
+            crt.draw(0, bmp, drawMenu, sw, sh, fx, curve);
+            if (drawIdle && tvBmp != null) crt.draw(1, tvBmp, drawTv, sw, sh, fx, curve);
+        }
+    }
     void stopLoop() { running = false; if (loop != null) try { loop.join(); } catch (InterruptedException ignored) { } loop = null; }
 
     void run() {
-        SurfaceHolder h = view.getHolder();
         paint.setFilterBitmap(false);
         while (running) {
             long start = System.nanoTime();
@@ -211,16 +222,13 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                 }
                 if (tv.active()) tv.drawBar(t);
                 Native.select(0, W, H);
-                Canvas c = h.lockCanvas();
-                if (c != null) {
-                    c.drawColor(Color.rgb(18, 10, 30));
-                    Rect mr = s instanceof Hello ? new Rect(0, 0, sw, sh) : menuR;
-                    fit(mr, W, H, dst);
-                    c.drawBitmap(bmp, null, dst, paint);
-                    if (idleTv) { Rect d = new Rect(); fit(tvR, TVW, TVH, d); c.drawBitmap(tvBmp, null, d, paint); }
-                    h.unlockCanvasAndPost(c);
-                }
+                Rect mr = s instanceof Hello ? new Rect(0, 0, sw, sh) : menuR;
+                fit(mr, W, H, dst);
+                synchronized (dst) { drawMenu.set(dst); }
+                drawIdle = idleTv;
+                if (idleTv) fit(tvR, TVW, TVH, drawTv);
             }
+            view.requestRender();
             long el = (System.nanoTime() - start) / 1000000;
             if (el < 33) try { Thread.sleep(33 - el); } catch (InterruptedException ignored) { }
         }
@@ -350,7 +358,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                 default:
                     row("Music", music ? "On" : "Off", 0); row("Menu sounds", sounds ? "On" : "Off", 0);
                     row("Theme", Native.themeName(theme), 0); row("Group episodes of a show", group ? "On" : "Off", 0);
-                    row("Swap A and B", Keys.swapAB ? "On" : "Off", 0); row("About ArchiveTV", "", 4); empty = "";
+                    row("Swap A and B", Keys.swapAB ? "On" : "Off", 0); row("Screen effect", Crt.NAMES[fx], 0); row("Curved screen", curve ? "On" : "Off", 0); row("About ArchiveTV", "", 4); empty = "";
             }
         }
         void fillFiles() {
@@ -408,6 +416,8 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                         case 2: theme = (theme + 1) % Native.themeCount(); Native.setTheme(theme); break;
                         case 3: group = !group; break;
                         case 4: Keys.swapAB = !Keys.swapAB; break;
+                        case 5: fx = (fx + 1) % Crt.NAMES.length; break;
+                        case 6: curve = !curve; break;
                         default: push(new About()); return;
                     }
                     save(); fill();
