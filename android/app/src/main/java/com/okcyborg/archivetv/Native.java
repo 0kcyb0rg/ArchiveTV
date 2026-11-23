@@ -5,6 +5,7 @@ final class Native {
     static { System.loadLibrary("atvui"); }
     static final int HAPPY = 0, SAD = 1, STATIC = 2, WOW = 3, SLEEP = 4, TALK = 5;
     static native void init(int w, int h);
+    static native void select(int which, int w, int h);
     static native void setTheme(int t);
     static native int themeCount();
     static native String themeName(int i);

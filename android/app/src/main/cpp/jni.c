@@ -20,9 +20,16 @@ static char *l1(JNIEnv *e, jstring s) {
 }
 #define FN(name) JNICALL Java_com_okcyborg_archivetv_Native_##name
 
-JNIEXPORT void FN(init)(JNIEnv *e, jclass c, jint w, jint h) {
-    free(buf); W = w; H = h; buf = (uint32_t *)calloc((size_t)w * h, 4); ui_init(buf, w, h);
+/* a few pictures of different sizes (0 = menus, 1 = the TV panel, 2 = the time bar); select() makes one current */
+static uint32_t *bufs[4]; static int bw[4], bh[4];
+JNIEXPORT void FN(select)(JNIEnv *e, jclass c, jint which, jint w, jint h) {
+    if (which < 0 || which > 3) return;
+    if (!bufs[which] || bw[which] != w || bh[which] != h) {
+        free(bufs[which]); bufs[which] = (uint32_t *)calloc((size_t)w * h, 4); bw[which] = w; bh[which] = h;
+    }
+    buf = bufs[which]; W = w; H = h; ui_init(buf, w, h);
 }
+JNIEXPORT void FN(init)(JNIEnv *e, jclass c, jint w, jint h) { Java_com_okcyborg_archivetv_Native_select(e, c, 0, w, h); }
 JNIEXPORT void FN(setTheme)(JNIEnv *e, jclass c, jint t) { ui_set_theme(t); }
 JNIEXPORT jint FN(themeCount)(JNIEnv *e, jclass c) { return ui_theme_count(); }
 JNIEXPORT jstring FN(themeName)(JNIEnv *e, jclass c, jint i) { return (*e)->NewStringUTF(e, ui_theme_name(i)); }

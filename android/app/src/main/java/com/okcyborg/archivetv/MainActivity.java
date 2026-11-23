@@ -27,7 +27,10 @@ import java.util.List;
 /** ArchiveTV for Android handhelds: the Miyoo app's screens, drawn by the same C code. */
 public class MainActivity extends Activity implements SurfaceHolder.Callback {
     static MainActivity self;
-    SurfaceView view;
+    SurfaceView view; android.widget.FrameLayout root; Tv tv;
+    /* screen split: where the menus and the TV go (screen pixels); mode 0 = menus only, 1 = TV left, 2 = TV on top */
+    final Rect menuR = new Rect(), tvR = new Rect(); int mode = 0, sw = 1, sh = 1; boolean full = false;
+    int[] tvPx; Bitmap tvBmp; static final int TVW = 640, TVH = 480;
     Thread loop; volatile boolean running;
     int W, H; int[] px; Bitmap bmp; final Paint paint = new Paint();
     final Object lock = new Object();
@@ -46,10 +49,16 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         super.onCreate(b);
         self = this;
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON | WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        root = new android.widget.FrameLayout(this);
+        root.setBackgroundColor(Color.BLACK);
         view = new SurfaceView(this);
         view.getHolder().addCallback(this);
         view.setFocusable(true);
-        setContentView(view);
+        root.addView(view, new android.widget.FrameLayout.LayoutParams(-1, -1));
+        tv = new Tv(this);
+        root.addView(tv.box, new android.widget.FrameLayout.LayoutParams(1, 1));
+        root.addView(tv.bar, new android.widget.FrameLayout.LayoutParams(1, 1));
+        setContentView(root);
         prefs = getSharedPreferences("atv", MODE_PRIVATE);
         theme = prefs.getInt("theme", 0); music = prefs.getBoolean("music", true); sounds = prefs.getBoolean("sounds", true);
         group = prefs.getBoolean("group", true); Keys.swapAB = prefs.getBoolean("swapab", false);
@@ -66,10 +75,10 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     void save() { prefs.edit().putInt("theme", theme).putBoolean("music", music).putBoolean("sounds", sounds).putBoolean("group", group).putBoolean("swapab", Keys.swapAB).apply(); }
     void sfx(int id) { if (sounds && id != 0) pool.play(id, 0.55f, 0.55f, 1, 0, 1f); }
 
-    void musicOn(boolean on) { if (on && music) bgm.start(this); else bgm.pause(); }
+    void musicOn(boolean on) { if (on && music && (tv == null || !tv.active())) bgm.start(this); else bgm.pause(); }
 
     @Override protected void onResume() { super.onResume(); hideBars(); musicOn(true); }
-    @Override protected void onPause() { super.onPause(); musicOn(false); }
+    @Override protected void onPause() { super.onPause(); musicOn(false); tv.saveSpot(); tv.pause(); }
     @Override protected void onDestroy() { super.onDestroy(); bgm.stop(); }
     void hideBars() {
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_FULLSCREEN
@@ -83,17 +92,19 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         }
         int k = Keys.map(code);
         if (k == Keys.NONE) return super.onKeyDown(code, e);
+        if (tv.focus) { tv.key(k); return true; }
         synchronized (lock) { keyq.add(k); }
         return true;
     }
     /* touch: screen position -> the UI's virtual pixels (half the drawn picture) */
     int[] virt(float x, float y) {
         synchronized (dst) {
-            if (dst.width() <= 0) return new int[] { -1, -1 };
+            if (dst.width() <= 0 || !dst.contains((int) x, (int) y)) return new int[] { -1, -1 };
             return new int[] { (int) ((x - dst.left) * W / dst.width() / 2), (int) ((y - dst.top) * H / dst.height() / 2) };
         }
     }
     @Override public boolean onTouchEvent(android.view.MotionEvent e) {
+        if (tv.active() && (full || mode == 0 || tvR.contains((int) e.getX(), (int) e.getY()))) { tv.touch(e); return true; }
         int[] v = virt(e.getX(), e.getY());
         float slop = 12 * getResources().getDisplayMetrics().density;
         switch (e.getActionMasked()) {
@@ -127,19 +138,44 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     @Override public boolean onKeyUp(int code, KeyEvent e) { return Keys.map(code) != Keys.NONE || super.onKeyUp(code, e); }
 
     @Override public void surfaceCreated(SurfaceHolder h) { }
-    @Override public void surfaceChanged(SurfaceHolder h, int fmt, int sw, int sh) {
+    @Override public void surfaceChanged(SurfaceHolder h, int fmt, int w, int hh) {
         stopLoop();
-        /* the UI is drawn at about 540 lines and scaled up with crisp pixels; the width follows the screen */
-        int vh = sh >= 1000 ? 540 : 480;
-        int vw = Math.min(1280, (int) Math.round(vh * (double) sw / sh)) & ~1;
-        synchronized (lock) {
-            W = vw; H = vh; px = new int[W * H];
-            bmp = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888);
-            Native.init(W, H); Native.setTheme(theme);
-        }
+        sw = w; sh = hh;
+        synchronized (lock) { layout(); Native.setTheme(theme); }
         running = true;
         loop = new Thread(this::run, "draw"); loop.start();
     }
+    /** wide screens: TV on the left half, menus on the right. Portrait: TV on top, menus below.
+     *  Squarer screens: menus only, and videos play full screen. */
+    void layout() {
+        double a = sw / (double) sh;
+        mode = a >= 1.5 ? 1 : a < 0.9 ? 2 : 0;
+        if (mode == 1) { tvR.set(0, 0, sw / 2, sh); menuR.set(sw / 2, 0, sw, sh); }
+        else if (mode == 2) { int th = sw * 3 / 4; tvR.set(0, 0, sw, th); menuR.set(0, th, sw, sh); }
+        else { tvR.set(0, 0, sw, sh); menuR.set(0, 0, sw, sh); }
+        int mw = menuR.width(), mh = menuR.height();
+        /* the menus are drawn small and scaled up with crisp pixels: 640 wide for tall panels, ~480-540 lines otherwise */
+        if (mw < mh * 1.2) { W = 640; H = (int) Math.round(640.0 * mh / mw) & ~1; }
+        else { H = mh >= 1000 ? 540 : 480; W = Math.min(1280, (int) Math.round(H * (double) mw / mh)) & ~1; }
+        px = new int[W * H]; bmp = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888);
+        if (tvPx == null) { tvPx = new int[TVW * TVH]; tvBmp = Bitmap.createBitmap(TVW, TVH, Bitmap.Config.ARGB_8888); }
+        Native.select(0, W, H);
+        placeTv();
+    }
+    /** puts the video and its time bar over the TV area (or the whole screen) */
+    void placeTv() {
+        Rect r = full || mode == 0 ? new Rect(0, 0, sw, sh) : tvR;
+        runOnUiThread(() -> {
+            for (View v : new View[] { tv.box, tv.bar }) {
+                android.widget.FrameLayout.LayoutParams lp = new android.widget.FrameLayout.LayoutParams(r.width(), r.height());
+                lp.leftMargin = r.left; lp.topMargin = r.top;
+                v.setLayoutParams(lp);
+            }
+            tv.box.setVisibility(tv.active() ? View.VISIBLE : View.GONE);
+            tv.bar.setVisibility(tv.active() ? View.VISIBLE : View.GONE);
+        });
+    }
+    void setFull(boolean f) { full = f; placeTv(); }
     @Override public void surfaceDestroyed(SurfaceHolder h) { stopLoop(); }
     void stopLoop() { running = false; if (loop != null) try { loop.join(); } catch (InterruptedException ignored) { } loop = null; }
 
@@ -161,24 +197,42 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                 }
                 Screen s = stack.peek();
                 if (s == null) { runOnUiThread(this::finish); running = false; break; }
-                s.draw(now());
+                double t = now();
+                Native.select(0, W, H);
+                s.draw(t);
                 Native.frame(px);
                 bmp.setPixels(px, 0, W, 0, 0, W, H);
-            }
-            Canvas c = h.lockCanvas();
-            if (c != null) {
-                c.drawColor(Color.BLACK);
-                double sc = Math.min(c.getWidth() / (double) W, c.getHeight() / (double) H);
-                int dw = (int) (W * sc), dh = (int) (H * sc);
-                synchronized (dst) { dst.set((c.getWidth() - dw) / 2, (c.getHeight() - dh) / 2, (c.getWidth() + dw) / 2, (c.getHeight() + dh) / 2); }
-                c.drawBitmap(bmp, null, dst, paint);
-                h.unlockCanvasAndPost(c);
+                boolean idleTv = mode != 0 && !tv.active() && !(s instanceof Hello);
+                if (idleTv) {   /* the little guy hops on the TV until something plays */
+                    Native.select(1, TVW, TVH);
+                    Native.hello(hello, 99, null, t);
+                    Native.frame(tvPx);
+                    tvBmp.setPixels(tvPx, 0, TVW, 0, 0, TVW, TVH);
+                }
+                if (tv.active()) tv.drawBar(t);
+                Native.select(0, W, H);
+                Canvas c = h.lockCanvas();
+                if (c != null) {
+                    c.drawColor(Color.rgb(18, 10, 30));
+                    Rect mr = s instanceof Hello ? new Rect(0, 0, sw, sh) : menuR;
+                    fit(mr, W, H, dst);
+                    c.drawBitmap(bmp, null, dst, paint);
+                    if (idleTv) { Rect d = new Rect(); fit(tvR, TVW, TVH, d); c.drawBitmap(tvBmp, null, d, paint); }
+                    h.unlockCanvasAndPost(c);
+                }
             }
             long el = (System.nanoTime() - start) / 1000000;
             if (el < 33) try { Thread.sleep(33 - el); } catch (InterruptedException ignored) { }
         }
     }
 
+    /** fits a w x h picture inside r, centred, keeping its shape */
+    void fit(Rect r, int w, int h, Rect out) {
+        double sc = Math.min(r.width() / (double) w, r.height() / (double) h);
+        int dw = (int) (w * sc), dh = (int) (h * sc);
+        synchronized (dst) { out.set(r.left + (r.width() - dw) / 2, r.top + (r.height() - dh) / 2, r.left + (r.width() + dw) / 2, r.top + (r.height() + dh) / 2); }
+    }
+    String hello = SAY[(int) (System.currentTimeMillis() % SAY.length)];
     void push(Screen s) { stack.push(s); }
     void pop() { stack.pop(); }
     void runBg(Runnable r) { new Thread(r, "net").start(); }
@@ -189,10 +243,10 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         playSrc(f.exists() ? f.getPath() : Archive.downloadUrl(id, name), title, id + "/" + name);
     }
     void playSrc(String src, String title, String key) {
-        Intent i = new Intent(this, PlayerActivity.class);
-        i.putExtra("url", src); i.putExtra("title", title); i.putExtra("key", key);
-        startActivity(i);
+        runOnUiThread(() -> { tv.play(src, title, key); musicOn(false); placeTv(); });
     }
+    /** the TV stopped: back to the little guy, and the music */
+    void tvStopped() { full = false; placeTv(); musicOn(true); }
     /** the download % in the footer, like the Miyoo's arrow badge */
     void badge() { String b = Downloader.badge(); if (b != null) Native.footerBadge(b); }
 
@@ -332,6 +386,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                 tab = (tab + ((k == Keys.L1 || k == Keys.L2) ? TABS.length - 1 : 1)) % TABS.length; sel = 0; top = 0; selT = now(); sfx(sTab); fill(); return;
             }
             if (k == Keys.SELECT) { theme = (theme + 1) % Native.themeCount(); Native.setTheme(theme); save(); say("Theme: " + Native.themeName(theme)); fill(); return; }
+            if (k == Keys.B && tv.active()) { tv.takeFocus(); return; }
             if (k == Keys.MENU || k == Keys.B) { sfx(sBack); push(new Confirm()); return; }
             if (k == Keys.X) { removeAt(); return; }
             if (k != Keys.A && k != Keys.START) return;
