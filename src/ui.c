@@ -329,7 +329,7 @@ static void cursor(int x, int y, double t) {
 void ui_thumb(const uint32_t *px, int w, int h, int sel_vis, double age, double t) {
     B = T;
     if (!px || w <= 0 || h <= 0) return;
-    int bw = 86, bh = 66;                                   /* virtual: a 160x120 picture plus the frame */
+    int bw = 94, bh = 72;                                   /* virtual: a 176x132 picture plus the frame */
     int lx = 4, ly = 38, lh = UVIS * UROWH + 12;
     int x = lx + (UW - 8) - bw - 6;
     int y = sel_vis < UVIS / 2 ? ly + lh - bh - 6 : ly + 6;   /* the half of the list the cursor isn't in */

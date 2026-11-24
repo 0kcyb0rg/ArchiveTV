@@ -216,12 +216,13 @@ static int g_theme = 1;   /* Night is the default */
 static void settings_save(int tab);
 static void queue_badge(char *b, size_t cap);
 static void queue_tick(void);
-#define TH_MAXW 160
-#define TH_MAXH 120
+#define TH_MAXW 176
+#define TH_MAXH 132
 #define TH_SLOTS 32
-typedef struct { char id[128]; int state, w, h; uint32_t px[TH_MAXW * TH_MAXH]; double used; } Thumb;   /* state 1 = fetching, 2 = ready, 3 = none */
+typedef struct { char id[600]; int state, w, h; uint32_t px[TH_MAXW * TH_MAXH]; double used; } Thumb;   /* id = the picture's address */   /* state 1 = fetching, 2 = ready, 3 = none */
 static void th_poll(void);
-static Thumb *thumb_want(const char *id);
+static Thumb *thumb_want(const char *url);
+static const char *thumb_of_item(const char *id);
 static int g_thumbs = 1;   /* Settings > Thumbnails */
 typedef const char *(*ThumbFn)(int row);
 static ThumbFn g_thumb_fn = 0;   /* set right before a list_loop whose rows have Internet Archive items */
@@ -322,7 +323,7 @@ static int list_loop_t(const char *title, int n, LabelFn fn, const char *footer,
         else ui_header(title, cnt, t, MOOD_HAPPY);
         (void)tsel; ui_list(rows_v, n, *sel, top, (int)moff, t, empty);
         th_poll();
-        if (thf && n && t - tsel > 0.5) {   /* resting on a row: show its picture */
+        if (thf && n && t - tsel > 0.3) {   /* resting on a row: show its picture */
             const char *id = thf(*sel);
             Thumb *th = id ? thumb_want(id) : 0;
             if (th) { if (th_for != th->id) { th_for = th->id; th_t = t; } ui_thumb(th->px, th->w, th->h, *sel - top, t - th_t, t); }
@@ -779,7 +780,7 @@ static Chan chans[64]; static int nchan = 0;
 typedef struct { char id[128]; char title[160]; char title8[200]; int coll; } Item;
 static Item *items; static int nitems = 0, items_found = 0, items_page = 0;
 
-typedef struct { char name[400]; char fmt[40]; char disp[200]; long long size; int w, h, rank, have; double len; } VFile;
+typedef struct { char name[400]; char fmt[40]; char disp[200]; long long size; int w, h, rank, have; double len; char thumb[400]; } VFile;
 static VFile *files; static int nfiles = 0;
 static char item_title[200], item_title8[300];
 
@@ -2314,6 +2315,45 @@ static int cmp_file(const void *a, const void *b) {
     if (x->size != y->size) return x->size < y->size ? -1 : 1;
     return strcasecmp(x->name, y->name);
 }
+/* Internet Archive makes a few stills of each video: "<name>.thumbs/<name>_000057.jpg". Each video file gets
+   one from near its start (the third, past any title card), matched by name without the extension. */
+static char (*th_names)[400]; static int th_n;
+static void thumb_note(const char *name) {
+    const char *d = strstr(name, ".thumbs/");
+    if (!d || !strstr(d, ".jpg") || th_n >= 600) return;
+    if (!th_names) { th_names = calloc(600, 400); if (!th_names) return; }
+    snprintf(th_names[th_n++], 400, "%s", name);
+}
+static void thumb_base(char *b, size_t cap, const char *name) {   /* "Ep 1_512kb.mp4" -> "Ep 1" */
+    snprintf(b, cap, "%s", name);
+    char *dot = strrchr(b, '.'); char *sl = strrchr(b, '/');
+    if (dot && (!sl || dot > sl)) *dot = 0;
+    size_t n = strlen(b);
+    if (n > 6 && !strcmp(b + n - 6, "_512kb")) b[n - 6] = 0;
+    else if (n > 3 && !strcmp(b + n - 3, ".ia")) b[n - 3] = 0;
+}
+static int cmp_str400(const void *a, const void *b) { return strcmp((const char *)a, (const char *)b); }
+static void thumb_match(void) {
+    if (th_n) qsort(th_names, (size_t)th_n, 400, cmp_str400);
+    for (int i = 0; i < nfiles; i++) {
+        char b[400], want[420]; thumb_base(b, sizeof b, files[i].name);
+        snprintf(want, sizeof want, "%s.thumbs/", b);
+        size_t wl = strlen(want); int hit = -1, k = 0;
+        for (int j = 0; j < th_n; j++) if (!strncmp(th_names[j], want, wl)) { hit = j; if (++k == 3) break; }
+        files[i].thumb[0] = 0;
+        if (hit >= 0) snprintf(files[i].thumb, sizeof files[i].thumb, "%s", th_names[hit]);
+    }
+    th_n = 0;
+}
+static char cur_item_id[128];
+static const char *thumb_file(int fi) {   /* a still from this video, or else the item's picture */
+    static char u[4][900]; static int k = 0;
+    if (fi < 0 || fi >= nfiles) return 0;
+    if (!files[fi].thumb[0]) return thumb_of_item(cur_item_id);
+    char ide[300], ne[800]; urlenc(ide, sizeof ide, cur_item_id, 0); urlenc(ne, sizeof ne, files[fi].thumb, 1);
+    k = (k + 1) & 3; snprintf(u[k], sizeof u[k], "https://archive.org/download/%s/%s", ide, ne);
+    return u[k];
+}
 static int load_item(const char *id) {
     char url[600], ide[400];
     urlenc(ide, sizeof ide, id, 0);
@@ -2322,7 +2362,8 @@ static int load_item(const char *id) {
     char *js = http_get(url, &err);
     if (!js) return err ? err : -1;
     if (!files) files = (VFile *)calloc(400, sizeof(VFile));
-    nfiles = 0; item_title[0] = 0; item_title8[0] = 0;
+    nfiles = 0; item_title[0] = 0; item_title8[0] = 0; th_n = 0;
+    snprintf(cur_item_id, sizeof cur_item_id, "%s", id);
     const char *md = jget(js, "metadata");
     if (md) { char t[400]; const char *tv = jget(md, "title"); if (tv) { jstr(tv, t, sizeof t); l1(item_title, sizeof item_title, t); snprintf(item_title8, sizeof item_title8, "%s", t); } }
     if (!item_title[0]) l1(item_title, sizeof item_title, id);
@@ -2333,7 +2374,7 @@ static int load_item(const char *id) {
         char name[400], fmt[64], tmp[64];
         const char *v = jget(el, "name"); if (!v) continue;
         jstr(v, name, sizeof name);
-        if (!is_video_name(name)) continue;
+        if (!is_video_name(name)) { thumb_note(name); continue; }
         VFile *f = &files[nfiles];
         memset(f, 0, sizeof *f);
         snprintf(f->name, sizeof f->name, "%s", name);
@@ -2359,6 +2400,7 @@ static int load_item(const char *id) {
         nfiles++;
     }
     free(js);
+    thumb_match();
     qsort(files, (size_t)nfiles, sizeof(VFile), cmp_file);
     logf_("item %s: %d video files", id, nfiles);
     return 0;
@@ -2406,12 +2448,15 @@ static void lbl_irow(int r, char *m, size_t mc, char *s, size_t sc, int *tone) {
     snprintf(m, mc, "%s", sr->show); snprintf(s, sc, "%d eps", sr->n); *tone = 4;
 }
 static void lbl_gmem(int r, char *m, size_t mc, char *s, size_t sc, int *tone) { lbl_file(gmem[r], m, mc, s, sc, tone); }
+static const char *thumb_gmem(int r) { return r < ngmem ? thumb_file(gmem[r]) : 0; }
+static const char *thumb_irow(int r) { if (r >= nirow) return 0; int v = irow[r]; return thumb_file(v >= 0 ? v : g_ser[-v - 1].first); }
 /* the episodes of one show inside an item, in episode order */
 static void screen_series_files(const char *id, int sid) {
     char title[120]; snprintf(title, sizeof title, "%s", g_ser[sid].show);
     ngmem = series_members(nfiles, sid, gmem, fname_i);
     int sel = 0; const char *status = "";
     for (;;) {
+        g_thumb_fn = thumb_gmem;
         int k = list_loop(title, ngmem, lbl_gmem, "A:Menu  START:Watch  B:Back", &sel, "Nothing here.", &status);
         if (k == K_B || k == K_MENU) return;
         status = "";
@@ -2432,6 +2477,7 @@ static void screen_item(const char *id, const char *fallback_title) {
         series_build(nfiles, fname_i);
         nirow = series_rows(nfiles, irow);
         if (sel >= nirow) sel = nirow ? nirow - 1 : 0;
+        g_thumb_fn = thumb_irow;
         int k = list_loop(my_title, nirow, lbl_irow, "A:Menu  X:Sort  Y:Save", &sel, "No video files in this item.", &status);
         if (k == K_B || k == K_MENU) return;
         if (k == K_Y) { status = save_msg(chan_add("item", id, my_title8)); continue; }
@@ -2530,10 +2576,10 @@ static void open_item_idx(int idx) {
 static const char *thumb_crow(int r) {
     if (r >= ncrow) return 0;
     int v = crow[r];
-    return v >= 0 ? items[v].id : items[g_ser[-v - 1].first].id;   /* a show: its first episode's picture */
+    return thumb_of_item(v >= 0 ? items[v].id : items[g_ser[-v - 1].first].id);   /* a show: its first episode's picture */
 }
 static int *smem_cur; static int nsmem_cur;
-static const char *thumb_smem(int r) { return r < nsmem_cur ? items[smem_cur[r]].id : 0; }
+static const char *thumb_smem(int r) { return r < nsmem_cur ? thumb_of_item(items[smem_cur[r]].id) : 0; }
 static void lbl_smem(int r, char *m, size_t mc, char *s, size_t sc, int *tone) { lbl_item(smem_cur[r], m, mc, s, sc, tone); }
 /* results that look like episodes of one show, in episode order */
 static void screen_series_items(int sid) {
@@ -2665,7 +2711,7 @@ static void lbl_gcoll(int i, char *m, size_t mc, char *s, size_t sc, int *tone) 
     snprintf(m, mc, "%s", g >= 0 ? gents[g].title : "?");
     if (g >= 0 && gents[g].search) snprintf(s, sc, "show");
 }
-static const char *thumb_gcoll(int i) { int g = gc_idx(g_cur_cat, i); return g >= 0 && !gents[g].search ? gents[g].id : 0; }
+static const char *thumb_gcoll(int i) { int g = gc_idx(g_cur_cat, i); return g >= 0 && !gents[g].search ? thumb_of_item(gents[g].id) : 0; }
 static void screen_guide_cat(int cat) {
     int sel = 0;
     const char *status = "";
@@ -2730,7 +2776,7 @@ static void lbl_tab_saved(int i, char *m, size_t mc, char *s, size_t sc, int *to
     snprintf(s, sc, "%s", c->type == CH_ITEM ? "show" : c->type == CH_COLLECTION ? "coll." : "search");
     if (c->type == CH_SEARCH || c->type == CH_CSEARCH) *tone = 3;
 }
-static const char *thumb_saved(int i) { return i < nchan && (chans[i].type == CH_ITEM || chans[i].type == CH_COLLECTION) ? chans[i].arg : 0; }
+static const char *thumb_saved(int i) { return i < nchan && (chans[i].type == CH_ITEM || chans[i].type == CH_COLLECTION) ? thumb_of_item(chans[i].arg) : 0; }
 static void lbl_tab_lists(int i, char *m, size_t mc, char *s, size_t sc, int *tone) {
     (void)s; (void)sc;
     if (i == 0) { snprintf(m, mc, "+ New playlist..."); *tone = 4; return; }
@@ -3138,8 +3184,15 @@ static void th_poll(void) {
     unlink(p);
 }
 /* the picture for id, once it's here; asks for it if it isn't */
-static Thumb *thumb_want(const char *id) {
-    if (!g_thumbs || !has_wifi || !thumb_ok_id(id)) return 0;
+/* the Internet Archive picture of an item or collection */
+static const char *thumb_of_item(const char *id) {
+    static char u[8][200]; static int k = 0;
+    if (!thumb_ok_id(id)) return 0;
+    k = (k + 1) & 7; snprintf(u[k], sizeof u[k], "https://archive.org/services/img/%s", id);
+    return u[k];
+}
+static Thumb *thumb_want(const char *id) {   /* id: the address (https://archive.org/...) */
+    if (!g_thumbs || !has_wifi || !id || strncmp(id, "https://archive.org/", 20) || strlen(id) >= sizeof TC[0].id || strchr(id, '\'')) return 0;
     if (!TC) { TC = (Thumb *)calloc(TH_SLOTS, sizeof(Thumb)); if (!TC) return 0; }
     double t = now_s();
     for (int i = 0; i < TH_SLOTS; i++)
@@ -3151,7 +3204,7 @@ static Thumb *thumb_want(const char *id) {
     snprintf(th->id, sizeof th->id, "%s", id); th->state = 1; th->used = t; th->w = th->h = 0;
     static char cmd[2600]; char out[64], qo[100], tls[900];
     thumb_path(out, sizeof out); unlink(out); shq(qo, sizeof qo, out); curl_tls(tls, sizeof tls);
-    snprintf(cmd, sizeof cmd, "%s exec %s -sSL --fail --connect-timeout 10 --max-time 20 --max-filesize 262144 -A ArchiveTV-Miyoo %s -o %s 'https://archive.org/services/img/%s'",
+    snprintf(cmd, sizeof cmd, "%s exec %s -sSL --fail --connect-timeout 10 --max-time 20 --max-filesize 262144 -A ArchiveTV-Miyoo %s -o %s '%s'",
              CURL_ENV, CURL_BIN, tls, qo, id);
     pid_t pid = fork();
     if (pid == 0) { int nul = open("/dev/null", 1); if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); } execl("/bin/sh", "sh", "-c", cmd, (char *)0); _exit(127); }
