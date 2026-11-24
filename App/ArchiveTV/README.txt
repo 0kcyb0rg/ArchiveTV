@@ -20,7 +20,7 @@ HOME TABS (L1 / R1 or L2 / R2 to switch)
   Search  - search videos or collections; recent searches are kept
   Guide   - hand-picked collections by category (edit guide.txt)
   Saved   - your bookmarks: shows, collections and searches (Y anywhere saves)
-  Lists   - your playlists
+  Lists   - your playlists (Y renames, X deletes)
   Files   - the download queue, paused downloads, then the videos on your card
   (gear)  - Settings: music, menu sounds, scanlines, theme, vsync,
             group episodes, turn off after downloads, thumbnails, subtitles,

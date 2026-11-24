@@ -3953,7 +3953,7 @@ static const char *FOOT[6] = {
     "A:Menu  START:Go  L/R:Tab",
     "A:Open  L/R:Tab",
     "A:Menu  START:Open  L/R:Tab",
-    "A:Open  X:Delete  L/R:Tab",
+    "A:Open  Y:Rename  X:Delete",
     "A:Menu  X:Sort  Y:Mark",
     "A:Change  L/R:Tab",
 };
@@ -3994,6 +3994,19 @@ static void home(void) {
             continue;
         }
         armed = -1; status = "";
+        if (k == K_Y && tab == 3 && sel >= 1 && sel - 1 < npl) {   /* rename a playlist */
+            char old[64], nm[64]; snprintf(old, sizeof old, "%s", pls[sel - 1]); snprintf(nm, sizeof nm, "%s", old);
+            if (!keyboard_act("Rename playlist", nm, 40, "RENAME")) continue;
+            for (char *c = nm; *c; c++) if (strchr("\\/:*?\"<>|.", *c)) *c = '_';
+            size_t L = strlen(nm); while (L && nm[L - 1] == ' ') nm[--L] = 0;
+            char *b = nm; while (*b == ' ') b++;
+            if (!*b || !strcmp(b, old)) continue;
+            char po[800], pn[800]; pl_path(po, sizeof po, old); pl_path(pn, sizeof pn, b);
+            if (access(pn, F_OK) == 0 && strcasecmp(b, old)) { status = "There's a playlist with that name"; continue; }
+            if (rename(po, pn) == 0) { sync(); pl_scan(); for (int i = 0; i < npl; i++) if (!strcmp(pls[i], b)) sels[tab] = i + 1; status = "Renamed."; }
+            else status = "Could not rename it";
+            continue;
+        }
         if (k == K_Y && tab == 4) {   /* mark a downloaded video */
             int i = sel - nq - npart;
             if (i < 0 || i >= ndf) continue;
