@@ -328,7 +328,7 @@ static void cursor(int x, int y, double t) {
 }
 void ui_thumb(const uint32_t *px, int w, int h, int sel_vis, double t) {
     B = T;
-    int bw = 108, bh = 82;                                  /* virtual: a 204x152 picture plus the frame */
+    int bw = 103, bh = 78;                                  /* virtual: a 194x144 picture plus the frame */
     int lx = 4, ly = 38, lh = UVIS * UROWH + 12;
     int x = lx + (UW - 8) - bw - 6;
     int y = sel_vis < UVIS / 2 ? ly + lh - bh - 6 : ly + 6;   /* the half of the list the cursor isn't in */
@@ -344,13 +344,16 @@ void ui_thumb(const uint32_t *px, int w, int h, int sel_vis, double t) {
             }
         return;
     }
-    int dw = rw, dh = h * rw / w;                           /* fit, keeping the shape */
-    if (dh > rh) { dh = rh; dw = w * rh / h; }
-    int ox = rx + (rw - dw) / 2, oy = ry + (rh - dh) / 2;
-    for (int j = 0; j < dh; j++) {
-        const uint32_t *srow = px + (j * h / dh) * w;
-        uint32_t *o = T + (oy + j) * RW + ox;
-        for (int i = 0; i < dw; i++) o[i] = srow[i * w / dw];
+    /* "cover": fill the box, keeping the shape, and trim what sticks out on two sides */
+    int cw = w, ch = h;                                     /* the part of the picture that is shown */
+    if ((long)w * rh > (long)h * rw) cw = h * rw / rh; else ch = w * rh / rw;
+    if (cw < 1) cw = 1;
+    if (ch < 1) ch = 1;
+    int sx0 = (w - cw) / 2, sy0 = (h - ch) / 2;
+    for (int j = 0; j < rh; j++) {
+        const uint32_t *srow = px + (sy0 + j * ch / rh) * w + sx0;
+        uint32_t *o = T + (ry + j) * RW + rx;
+        for (int i = 0; i < rw; i++) o[i] = srow[i * cw / rw];
     }
 }
 int ui_marquee_extra = 0;   /* how many characters the selected title scrolls (set while drawing) */
