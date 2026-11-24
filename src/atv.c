@@ -216,6 +216,15 @@ static int g_theme = 1;   /* Night is the default */
 static void settings_save(int tab);
 static void queue_badge(char *b, size_t cap);
 static void queue_tick(void);
+#define TH_MAXW 160
+#define TH_MAXH 120
+#define TH_SLOTS 32
+typedef struct { char id[128]; int state, w, h; uint32_t px[TH_MAXW * TH_MAXH]; double used; } Thumb;   /* state 1 = fetching, 2 = ready, 3 = none */
+static void th_poll(void);
+static Thumb *thumb_want(const char *id);
+static int g_thumbs = 1;   /* Settings > Thumbnails */
+typedef const char *(*ThumbFn)(int row);
+static ThumbFn g_thumb_fn = 0;   /* set right before a list_loop whose rows have Internet Archive items */
 static int g_exit_code = 0;   /* 42 = launch.sh installs a downloaded update and starts the app again */
 static void upd_poll(void);
 static const char *upd_note(void);
@@ -235,6 +244,8 @@ static int list_loop_t(const char *title, int n, LabelFn fn, const char *footer,
     double tsel = now_s();
     static char mains[16][400], sides[16][48];
     URow rows_v[16];
+    ThumbFn thf = g_thumb_fn; g_thumb_fn = 0;   /* this list's preview pictures (screens set it each time) */
+    const char *th_for = 0; double th_t = 0;
     SDL_EnableKeyRepeat(300, 70);
     for (;;) {
         SDL_Event e;
@@ -310,6 +321,13 @@ static int list_loop_t(const char *title, int n, LabelFn fn, const char *footer,
         if (tab >= 0) ui_header_tabs(TABS, 6, tab, 0, t);
         else ui_header(title, cnt, t, MOOD_HAPPY);
         (void)tsel; ui_list(rows_v, n, *sel, top, (int)moff, t, empty);
+        th_poll();
+        if (thf && n && t - tsel > 0.5) {   /* resting on a row: show its picture */
+            const char *id = thf(*sel);
+            Thumb *th = id ? thumb_want(id) : 0;
+            if (th) { if (th_for != th->id) { th_for = th->id; th_t = t; } ui_thumb(th->px, th->w, th->h, *sel - top, t - th_t, t); }
+            else th_for = 0;
+        } else th_for = 0;
         if (theme_msg && t - theme_t < 1.5) ui_toast(theme_msg);
         else if (note && t - note_t < 4) ui_toast(note);
         else if (status && *status && **status) ui_toast(*status);
@@ -1580,7 +1598,7 @@ static void settings_save(int tab) {
     if (tab >= 0) g_tab = tab;
     char p[700]; snprintf(p, sizeof p, "%s/settings.txt", appdir);
     FILE *f = fopen(p, "w"); if (!f) return;
-    fprintf(f, "theme %d\ntab %d\nscreen %d\nmusic %d\nsounds %d\nvsync %d\ngroup %d\nautooff %d\n", g_theme, g_tab, g_fx, g_music, g_sounds, g_vsync, g_group, g_autooff);
+    fprintf(f, "theme %d\ntab %d\nscreen %d\nmusic %d\nsounds %d\nvsync %d\ngroup %d\nautooff %d\nthumbs %d\n", g_theme, g_tab, g_fx, g_music, g_sounds, g_vsync, g_group, g_autooff, g_thumbs);
     fclose(f);
 }
 /* reads one setting before everything else is up (the screen mode is picked before settings_load) */
@@ -1605,6 +1623,7 @@ static void settings_load(void) {
         else if (!strncmp(line, "sounds ", 7)) g_sounds = atoi(line + 7) != 0;
         else if (!strncmp(line, "group ", 6)) g_group = atoi(line + 6) != 0;
         else if (!strncmp(line, "autooff ", 8)) g_autooff = atoi(line + 8) != 0;
+        else if (!strncmp(line, "thumbs ", 7)) g_thumbs = atoi(line + 7) != 0;
     }
     fclose(f);
     if (g_theme < 0 || g_theme >= ui_theme_count()) g_theme = 1;
@@ -2508,7 +2527,13 @@ static void open_item_idx(int idx) {
     } else screen_item(it.id, it.title8);
     items_pop(&sv);
 }
+static const char *thumb_crow(int r) {
+    if (r >= ncrow) return 0;
+    int v = crow[r];
+    return v >= 0 ? items[v].id : items[g_ser[-v - 1].first].id;   /* a show: its first episode's picture */
+}
 static int *smem_cur; static int nsmem_cur;
+static const char *thumb_smem(int r) { return r < nsmem_cur ? items[smem_cur[r]].id : 0; }
 static void lbl_smem(int r, char *m, size_t mc, char *s, size_t sc, int *tone) { lbl_item(smem_cur[r], m, mc, s, sc, tone); }
 /* results that look like episodes of one show, in episode order */
 static void screen_series_items(int sid) {
@@ -2518,6 +2543,7 @@ static void screen_series_items(int sid) {
     int sel = 0; const char *status = "";
     for (;;) {
         smem_cur = mem; nsmem_cur = nm;
+        g_thumb_fn = thumb_smem;
         int k = list_loop(title, nm, lbl_smem, "A:Open  Y:Save  B:Back", &sel, "Nothing here.", &status);
         if (k == K_START) k = K_A;
         if (k == K_B || k == K_MENU) break;
@@ -2540,6 +2566,7 @@ static void screen_collection(const Chan *c) {
         series_build(nitems, iname_i);
         ncrow = series_rows(nitems, crow);
         if (sel > ncrow + more - 1) sel = ncrow + more ? ncrow + more - 1 : 0;
+        g_thumb_fn = thumb_crow;
         int k = list_loop(c->title, ncrow + more, lbl_crow, "A:Open  Y:Save  X:Sort  B:Back", &sel, empty, &status);
         if (k == K_START) k = K_A;
         if (k == K_B || k == K_MENU) return;
@@ -2638,12 +2665,14 @@ static void lbl_gcoll(int i, char *m, size_t mc, char *s, size_t sc, int *tone) 
     snprintf(m, mc, "%s", g >= 0 ? gents[g].title : "?");
     if (g >= 0 && gents[g].search) snprintf(s, sc, "show");
 }
+static const char *thumb_gcoll(int i) { int g = gc_idx(g_cur_cat, i); return g >= 0 && !gents[g].search ? gents[g].id : 0; }
 static void screen_guide_cat(int cat) {
     int sel = 0;
     const char *status = "";
     for (;;) {
         g_cur_cat = cat;
         int n = gc_n(cat);
+        g_thumb_fn = thumb_gcoll;
         int k = list_loop(gcats[cat], n, lbl_gcoll, "A:Open  Y:Save  B:Back", &sel, "No collections here.", &status);
         if (k == K_START) k = K_A;
         if (k == K_B || k == K_MENU) return;
@@ -2701,6 +2730,7 @@ static void lbl_tab_saved(int i, char *m, size_t mc, char *s, size_t sc, int *to
     snprintf(s, sc, "%s", c->type == CH_ITEM ? "show" : c->type == CH_COLLECTION ? "coll." : "search");
     if (c->type == CH_SEARCH || c->type == CH_CSEARCH) *tone = 3;
 }
+static const char *thumb_saved(int i) { return i < nchan && (chans[i].type == CH_ITEM || chans[i].type == CH_COLLECTION) ? chans[i].arg : 0; }
 static void lbl_tab_lists(int i, char *m, size_t mc, char *s, size_t sc, int *tone) {
     (void)s; (void)sc;
     if (i == 0) { snprintf(m, mc, "+ New playlist..."); *tone = 4; return; }
@@ -3036,6 +3066,99 @@ static void app_update(void) {
     if (k == K_A) { g_exit_code = 42; g_quit = 1; }
 }
 
+/* ---- preview pictures for the lists (Settings > Thumbnails) ----
+   archive.org/services/img/<id> is a small JPEG for most items (collections often have a PNG or GIF logo; those
+   are skipped). One is fetched at a time, only after the cursor has rested on a row, and kept for this run. */
+static Thumb *TC;
+static pid_t th_pid = 0; static int th_slot = -1;
+static void *th_cc; static AVFrame *th_fr;
+static int thumb_ok_id(const char *id) {
+    if (!id || !id[0] || strlen(id) >= 120) return 0;
+    for (const char *c = id; *c; c++) if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == '.' || *c == '_' || *c == '-')) return 0;
+    return 1;
+}
+static void thumb_path(char *d, size_t cap) { snprintf(d, cap, "/tmp/archivetv-thumb.jpg"); }
+/* the fetched file -> TC[slot].px, scaled down to fit TH_MAXW x TH_MAXH */
+static int thumb_decode(Thumb *th, const char *path) {
+    FILE *f = fopen(path, "rb"); if (!f) return -1;
+    static uint8_t buf[256 * 1024 + 64];
+    size_t n = fread(buf, 1, sizeof buf - 64, f); fclose(f);
+    if (n < 4 || buf[0] != 0xFF || buf[1] != 0xD8) return -1;    /* not a JPEG */
+    memset(buf + n, 0, 64);
+    if (!th_cc) {
+        const void *codec = avcodec_find_decoder_by_name("mjpeg");
+        if (!codec) return -1;
+        th_cc = avcodec_alloc_context3(codec);
+        if (!th_cc || avcodec_open2(th_cc, codec, 0) < 0) { th_cc = 0; logf_("thumbs: no JPEG decoder"); return -1; }
+        th_fr = av_frame_alloc();
+    }
+    AVPacket pk; av_init_packet(&pk); pk.data = buf; pk.size = (int)n;
+    int got = 0;
+    if (avcodec_decode_video2(th_cc, th_fr, &got, &pk) < 0 || !got) return -1;
+    AVFrame *fr = th_fr;
+    int cx, cy, gray = 0, full = 1;
+    switch (fr->format) {
+    case 0: cx = 1; cy = 1; full = 0; break;  case 12: cx = 1; cy = 1; break;
+    case 4: cx = 1; cy = 0; full = 0; break;  case 13: cx = 1; cy = 0; break;
+    case 5: cx = 0; cy = 0; full = 0; break;  case 14: cx = 0; cy = 0; break;
+    case 8: cx = cy = 0; gray = 1; break;
+    default: logf_("thumbs: %s has pixel format %d", th->id, fr->format); return -1;
+    }
+    int sw = fr->width, sh = fr->height;
+    if (sw <= 0 || sh <= 0) return -1;
+    int dw = TH_MAXW, dh = sh * TH_MAXW / sw;
+    if (dh > TH_MAXH) { dh = TH_MAXH; dw = sw * TH_MAXH / sh; }
+    if (dw < 1) dw = 1;
+    if (dh < 1) dh = 1;
+    const int *yt = ytab[full], *rv = rvt[full], *gu = gut[full], *gv = gvt[full], *bu = but_[full];
+    const uint8_t *cl = clp + 512;
+    for (int j = 0; j < dh; j++) {
+        int sy = j * sh / dh;
+        const uint8_t *Y = fr->data[0] + sy * fr->linesize[0];
+        const uint8_t *U = gray ? 0 : fr->data[1] + (sy >> cy) * fr->linesize[1], *V = gray ? 0 : fr->data[2] + (sy >> cy) * fr->linesize[2];
+        for (int i = 0; i < dw; i++) {
+            int sx = i * sw / dw, yy = yt[Y[sx]];
+            if (gray) { int g = cl[yy >> 8]; th->px[j * dw + i] = RGB(g, g, g); continue; }
+            int u = U[sx >> cx], v = V[sx >> cx];
+            th->px[j * dw + i] = ((uint32_t)cl[(yy + rv[v]) >> 8] << 16) | ((uint32_t)cl[(yy + gu[u] + gv[v]) >> 8] << 8) | cl[(yy + bu[u]) >> 8];
+        }
+    }
+    th->w = dw; th->h = dh;
+    return 0;
+}
+static void th_poll(void) {
+    if (th_pid <= 0) return;
+    int st = 0;
+    if (waitpid(th_pid, &st, WNOHANG) != th_pid) return;
+    th_pid = 0;
+    Thumb *th = &TC[th_slot];
+    char p[64]; thumb_path(p, sizeof p);
+    int ok = !(st & 0x7f) && !((st >> 8) & 255) && thumb_decode(th, p) == 0;
+    th->state = ok ? 2 : 3;
+    unlink(p);
+}
+/* the picture for id, once it's here; asks for it if it isn't */
+static Thumb *thumb_want(const char *id) {
+    if (!g_thumbs || !has_wifi || !thumb_ok_id(id)) return 0;
+    if (!TC) { TC = (Thumb *)calloc(TH_SLOTS, sizeof(Thumb)); if (!TC) return 0; }
+    double t = now_s();
+    for (int i = 0; i < TH_SLOTS; i++)
+        if (TC[i].state && !strcmp(TC[i].id, id)) { TC[i].used = t; return TC[i].state == 2 ? &TC[i] : 0; }
+    if (th_pid > 0 || access(CURL_BIN, F_OK) != 0) return 0;   /* one at a time */
+    int s = 0;
+    for (int i = 0; i < TH_SLOTS; i++) { if (!TC[i].state) { s = i; break; } if (TC[i].used < TC[s].used) s = i; }
+    Thumb *th = &TC[s];
+    snprintf(th->id, sizeof th->id, "%s", id); th->state = 1; th->used = t; th->w = th->h = 0;
+    static char cmd[2600]; char out[64], qo[100], tls[900];
+    thumb_path(out, sizeof out); unlink(out); shq(qo, sizeof qo, out); curl_tls(tls, sizeof tls);
+    snprintf(cmd, sizeof cmd, "%s exec %s -sSL --fail --connect-timeout 10 --max-time 20 --max-filesize 262144 -A ArchiveTV-Miyoo %s -o %s 'https://archive.org/services/img/%s'",
+             CURL_ENV, CURL_BIN, tls, qo, id);
+    pid_t pid = fork();
+    if (pid == 0) { int nul = open("/dev/null", 1); if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); } execl("/bin/sh", "sh", "-c", cmd, (char *)0); _exit(127); }
+    if (pid > 0) { th_pid = pid; th_slot = s; } else th->state = 3;
+    return 0;
+}
+
 /* ---------- settings + about ---------- */
 static void lbl_tab_settings(int i, char *m, size_t mc, char *s, size_t sc, int *tone) {
     switch (i) {
@@ -3046,7 +3169,8 @@ static void lbl_tab_settings(int i, char *m, size_t mc, char *s, size_t sc, int 
     case 4: snprintf(m, mc, "Vsync (no tearing)"); snprintf(s, sc, "%s", g_vsync ? "On" : "Off"); break;
     case 5: snprintf(m, mc, "Group episodes of a show"); snprintf(s, sc, "%s", g_group ? "On" : "Off"); break;
     case 6: snprintf(m, mc, "Turn off after downloads"); snprintf(s, sc, "%s", g_autooff ? "On" : "Off"); break;
-    case 7: upd_poll(); snprintf(m, mc, "Update ArchiveTV...");
+    case 7: snprintf(m, mc, "Thumbnails"); snprintf(s, sc, "%s", g_thumbs ? "On" : "Off"); break;
+    case 8: upd_poll(); snprintf(m, mc, "Update ArchiveTV...");
             if (upd_ready) { snprintf(s, sc, "Restart to finish"); *tone = 1; }
             else if (upd_new[0]) { snprintf(s, sc, "%s is out!", upd_new); *tone = 1; }
             else snprintf(s, sc, "v%s", app_version()); break;
@@ -3078,7 +3202,8 @@ static void settings_action(int i) {
     }
     case 5: g_group = !g_group; break;
     case 6: g_autooff = !g_autooff; g_off_armed = 0; break;
-    case 7: app_update(); return;
+    case 7: g_thumbs = !g_thumbs; break;
+    case 8: app_update(); return;
     default: screen_about(); return;
     }
     sfx(SFX_TOGGLE);
@@ -3092,7 +3217,7 @@ static int tab_count(int tab) {
     case 2: return nchan;
     case 3: return npl + 1;
     case 4: return nq + npart + ndf;
-    default: return 9;
+    default: return 10;
     }
 }
 static const char *FOOT[6] = {
@@ -3112,6 +3237,7 @@ static void home(void) {
     for (;;) {
         hist_load(); pl_scan(); scan_downloads();
         int n = tab_count(tab);
+        g_thumb_fn = tab == 2 ? thumb_saved : 0;
         int k = list_loop_t("ArchiveTV", n, TABFN[tab], FOOT[tab], &sels[tab], EMPTY[tab], &status, tab);
         int sel = sels[tab];
         if (k == K_L1 || k == K_R1) { tab = (tab + (k == K_R1 ? 1 : 5)) % 6; armed = -1; status = ""; settings_save(tab); continue; }

@@ -244,6 +244,8 @@ void av_init_packet(AVPacket *);
 int av_dup_packet(AVPacket *);
 void av_free_packet(AVPacket *);
 int avcodec_open2(void *, const void *, void **);
+const void *avcodec_find_decoder_by_name(const char *);
+void *avcodec_alloc_context3(const void *);
 int avcodec_close(void *);
 void avcodec_flush_buffers(void *);
 int avcodec_decode_audio4(void *, AVFrame *, int *, const AVPacket *);

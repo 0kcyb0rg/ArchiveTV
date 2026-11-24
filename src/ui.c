@@ -326,6 +326,34 @@ static void cursor(int x, int y, double t) {
     for (int i = 0; i < 5; i++) R(x + i, y + i, 1, 11 - 2 * i, NAVY);
     for (int i = 0; i < 3; i++) R(x + 1 + i, y + 2 + i, 1, 7 - 2 * i, PINK);
 }
+void ui_thumb(const uint32_t *px, int w, int h, int sel_vis, double age, double t) {
+    B = T;
+    if (!px || w <= 0 || h <= 0) return;
+    int bw = 86, bh = 66;                                   /* virtual: a 160x120 picture plus the frame */
+    int lx = 4, ly = 38, lh = UVIS * UROWH + 12;
+    int x = lx + (UW - 8) - bw - 6;
+    int y = sel_vis < UVIS / 2 ? ly + lh - bh - 6 : ly + 6;   /* the half of the list the cursor isn't in */
+    win(x, y, bw, bh, NAVY);
+    int rx = x * 2 + 6, ry = y * 2 + 6, rw = bw * 2 - 12, rh = bh * 2 - 12;
+    rr(T, rx, ry, rw, rh, 0);
+    if (age < 0.18) {                                       /* tuning in */
+        unsigned seed = (unsigned)(t * 1000) * 2654435761u;
+        for (int j = 0; j < rh; j += 2)
+            for (int i = 0; i < rw; i += 2) {
+                seed = seed * 1103515245u + 12345u; unsigned v = (seed >> 24) & 255; v = 30 + (v * v >> 9);
+                rr(T, rx + i, ry + j, 2, 2, C(v, v, v));
+            }
+        return;
+    }
+    int dw = rw, dh = h * rw / w;                           /* fit, keeping the shape */
+    if (dh > rh) { dh = rh; dw = w * rh / h; }
+    int ox = rx + (rw - dw) / 2, oy = ry + (rh - dh) / 2;
+    for (int j = 0; j < dh; j++) {
+        const uint32_t *srow = px + (j * h / dh) * w;
+        uint32_t *o = T + (oy + j) * RW + ox;
+        for (int i = 0; i < dw; i++) o[i] = srow[i * w / dw];
+    }
+}
 int ui_marquee_extra = 0;   /* how many characters the selected title scrolls (set while drawing) */
 void ui_list(const URow *rows, int n, int sel, int top, int moff, double t, const char *empty) {
     B = T;

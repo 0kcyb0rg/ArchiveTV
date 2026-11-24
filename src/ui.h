@@ -34,6 +34,9 @@ void ui_set_theme(int i);
 void ui_footer_badge(const char *b);
 void ui_hello(const char *say, int shown, const char *hints, double t);   /* shown = letters typed so far */
 void ui_about(double t);
+/* a preview picture (RGB, w x h real pixels) in a little frame at the right of the list, away from row sel_vis;
+   age = seconds since it appeared (it tunes in with a flash of static) */
+void ui_thumb(const uint32_t *px, int w, int h, int sel_vis, double age, double t);
 extern const char *ui_app_version;   /* shown on the About screen */
 int ui_hit_tab(int vx, int vy);
 int ui_hit_row(int vx, int vy);
