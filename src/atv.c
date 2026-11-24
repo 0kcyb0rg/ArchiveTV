@@ -216,14 +216,16 @@ static int g_theme = 1;   /* Night is the default */
 static void settings_save(int tab);
 static void queue_badge(char *b, size_t cap);
 static void queue_tick(void);
-#define TH_MAXW 176
-#define TH_MAXH 132
-#define TH_SLOTS 32
+#define TH_MAXW 204
+#define TH_MAXH 152
+#define TH_SLOTS 48
+#define TH_BATCH 6
 typedef struct { char id[600]; int state, w, h; uint32_t px[TH_MAXW * TH_MAXH]; double used; } Thumb;   /* id = the picture's address */   /* state 1 = fetching, 2 = ready, 3 = none */
 static void th_poll(void);
 static void local_thumb_drop(const char *name);
 static pid_t th_pid = 0;   /* the picture being fetched */
 static Thumb *thumb_want(const char *url, int *waiting);
+static void thumb_ask(const char **ids, int n);
 static const char *thumb_of_item(const char *id);
 static int g_thumbs = 1;   /* Settings > Thumbnails */
 typedef const char *(*ThumbFn)(int row);
@@ -325,15 +327,17 @@ static int list_loop_t(const char *title, int n, LabelFn fn, const char *footer,
         (void)tsel; ui_list(rows_v, n, *sel, top, (int)moff, t, empty);
         th_poll();
         if (thf && n) {   /* the selected row's picture (static while it comes), then the next rows' ahead of time */
+            static char wb[TH_BATCH][600]; const char *want[TH_BATCH]; int nw = 0;   /* copies: thf reuses its buffers */
+            for (int d = 0; d < TH_BATCH; d++) {
+                int r = *sel + (d == TH_BATCH - 1 ? -1 : d); if (r < 0 || r >= n) continue;
+                const char *u = thf(r); if (!u) continue;
+                snprintf(wb[nw], sizeof wb[nw], "%s", u); want[nw] = wb[nw]; nw++;
+            }
+            if (th_pid <= 0) thumb_ask(want, nw);
             const char *id = thf(*sel); int wait = 0;
             Thumb *th = id ? thumb_want(id, &wait) : 0;
             if (th && th->state == 2) ui_thumb(th->px, th->w, th->h, *sel - top, t);
             else if (wait || (th && th->state == 1)) ui_thumb(0, 0, 0, *sel - top, t);
-            if (th_pid <= 0 && th && th->state >= 2 && t - tsel > 0.15)
-                for (int d = 1; d <= 4 && th_pid <= 0; d++) {
-                    int r = *sel + (d == 4 ? -1 : d); if (r < 0 || r >= n) continue;
-                    const char *pid_ = thf(r); int w2; if (pid_) thumb_want(pid_, &w2);
-                }
         }
         if (theme_msg && t - theme_t < 1.5) ui_toast(theme_msg);
         else if (note && t - note_t < 4) ui_toast(note);
@@ -2930,7 +2934,7 @@ static int upd_path_ok(const char *p) {
     for (const char *c = p; *c; c++) if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == '.' || *c == '_' || *c == '-' || *c == '/')) return 0;
     static const char *const MINE[] = { "settings.txt", "queue.txt", "searches.txt", "channels.txt", "log.txt", "log.txt.old", "music/music.raw", "update-failed.txt", 0 };
     for (int i = 0; MINE[i]; i++) if (!strcmp(p, MINE[i])) return 0;
-    if (!strncmp(p, "videos/", 7) || !strncmp(p, "playlists/", 10) || !strncmp(p, "update/", 7)) return 0;
+    if (!strncmp(p, "videos/", 7) || !strncmp(p, "playlists/", 10) || !strncmp(p, "update/", 7) || !strncmp(p, "thumbs/", 7)) return 0;
     return 1;
 }
 /* reads update.txt; returns the number of files, or -1 when it isn't a list we trust */
@@ -3134,13 +3138,17 @@ static void app_update(void) {
    are skipped). One is fetched at a time, only after the cursor has rested on a row, and kept for this run. */
 static Thumb *TC;
 static int th_slot = -1; static double th_started;
+static int th_batch[TH_BATCH], th_nbatch = 0;   /* the slots one curl is fetching together */
 static void *th_cc; static AVFrame *th_fr;
 static int thumb_ok_id(const char *id) {
     if (!id || !id[0] || strlen(id) >= 120) return 0;
     for (const char *c = id; *c; c++) if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == '.' || *c == '_' || *c == '-')) return 0;
     return 1;
 }
-static void thumb_path(char *d, size_t cap) { snprintf(d, cap, "/tmp/archivetv-thumb.jpg"); }
+/* pictures from Internet Archive are kept on the card in thumbs/, named by the CRC-32 of their address */
+static void thumb_cache(char *d, size_t cap, const char *url, const char *ext) {
+    snprintf(d, cap, "%s/thumbs/%08x%s", appdir, crc32_buf(0, (const unsigned char *)url, strlen(url)), ext);
+}
 static int thumb_from_frame(Thumb *th, AVFrame *fr);
 /* the fetched file -> TC[slot].px */
 static int thumb_decode(Thumb *th, const char *path) {
@@ -3248,15 +3256,24 @@ static void th_poll(void) {
     th_pid = 0;
     Thumb *th = &TC[th_slot];
     int ok = !(st & 0x7f) && !((st >> 8) & 255);
-    if (!strncmp(th->id, "local:", 6)) {
+    if (!th_nbatch) {
         ok = ok && local_thumb_load(th, th->id + 6) == 0;
         if (!ok) logf_("thumbs: no frame from %s (%d)", th->id + 6, (st & 0x7f) ? 128 + (st & 0x7f) : (st >> 8) & 255);
-    } else {
-        char p[64]; thumb_path(p, sizeof p);
-        ok = ok && thumb_decode(th, p) == 0;
-        unlink(p);
+        th->state = ok ? 2 : 3;
+        return;
     }
-    th->state = ok ? 2 : 3;
+    /* a batch: each picture is good or not on its own */
+    for (int b = 0; b < th_nbatch; b++) {
+        Thumb *x = &TC[th_batch[b]];
+        if (x->state != 1) continue;
+        char tmp[800], fin[800]; thumb_cache(tmp, sizeof tmp, x->id, ".tmp"); thumb_cache(fin, sizeof fin, x->id, ".jpg");
+        int good = thumb_decode(x, tmp) == 0;
+        if (good) rename(tmp, fin); else unlink(tmp);
+        x->state = good ? 2 : 3;
+    }
+    logf_("thumbs: %d fetched in %.1f s", th_nbatch, now_s() - th_started);
+    th_nbatch = 0;
+    return;
 }
 /* the picture for id, once it's here; asks for it if it isn't */
 /* the Internet Archive picture of an item or collection */
@@ -3266,38 +3283,86 @@ static const char *thumb_of_item(const char *id) {
     k = (k + 1) & 7; snprintf(u[k], sizeof u[k], "https://archive.org/services/img/%s", id);
     return u[k];
 }
-/* the picture at this address (https://archive.org/...): its slot once asked for (state 1 = on its way,
-   2 = here, 3 = there's none), else 0 with *waiting = 1 while another fetch runs. Starts a fetch if none is running. */
+static Thumb *thumb_find(const char *id) {
+    if (!TC || !id) return 0;
+    for (int i = 0; i < TH_SLOTS; i++) if (TC[i].state && !strcmp(TC[i].id, id)) { TC[i].used = now_s(); return &TC[i]; }
+    return 0;
+}
+static int thumb_valid(const char *id) {
+    if (!g_thumbs || !id || strlen(id) >= sizeof TC[0].id) return 0;
+    if (!strncmp(id, "local:", 6)) return 1;
+    return has_wifi && !strncmp(id, "https://archive.org/", 20) && !strchr(id, '\'');
+}
+static Thumb *thumb_slot(const char *id) {   /* a free (or the least recently used) slot, now for id */
+    int s = -1;
+    for (int i = 0; i < TH_SLOTS; i++) {
+        if (TC[i].state == 1) continue;   /* being fetched */
+        if (!TC[i].state) { s = i; break; }
+        if (s < 0 || TC[i].used < TC[s].used) s = i;
+    }
+    if (s < 0) return 0;
+    Thumb *th = &TC[s];
+    snprintf(th->id, sizeof th->id, "%s", id); th->state = 1; th->used = now_s(); th->w = th->h = 0;
+    return th;
+}
+/* the picture at this address (https://archive.org/... or local:<downloaded file>): its slot once asked for
+   (state 1 = on its way, 2 = here, 3 = there's none), else 0 with *waiting = 1 while it waits its turn */
 static Thumb *thumb_want(const char *id, int *waiting) {
     *waiting = 0;
-    int local = id && !strncmp(id, "local:", 6);
-    if (!g_thumbs || !id || strlen(id) >= sizeof TC[0].id) return 0;
-    if (!local && (!has_wifi || strncmp(id, "https://archive.org/", 20) || strchr(id, '\''))) return 0;
+    if (!thumb_valid(id)) return 0;
     if (!TC) { TC = (Thumb *)calloc(TH_SLOTS, sizeof(Thumb)); if (!TC) return 0; }
-    double t = now_s();
-    for (int i = 0; i < TH_SLOTS; i++)
-        if (TC[i].state && !strcmp(TC[i].id, id)) { TC[i].used = t; return &TC[i]; }
-    if (!local && access(CURL_BIN, F_OK) != 0) return 0;
-    if (th_pid > 0) { *waiting = 1; return 0; }   /* one at a time */
-    int s = 0;
-    for (int i = 0; i < TH_SLOTS; i++) { if (!TC[i].state) { s = i; break; } if (TC[i].used < TC[s].used) s = i; }
-    Thumb *th = &TC[s];
-    snprintf(th->id, sizeof th->id, "%s", id); th->state = 1; th->used = t; th->w = th->h = 0;
-    if (local) {
-        if (local_thumb_load(th, id + 6) == 0) { th->state = 2; return th; }
-        pid_t pid = fork();
-        if (pid == 0) { int nul = open("/dev/null", 1); if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); } local_thumb_grab(id + 6); }
-        if (pid > 0) { th_pid = pid; th_slot = s; th_started = t; } else th->state = 3;
-        return th;
+    Thumb *th = thumb_find(id);
+    if (th) return th;
+    *waiting = 1;
+    return 0;
+}
+/* the list's wish list: ids[0] is the selected row, the rest are its neighbours. Pictures on the card are read at
+   once; the missing ones are fetched together by one curl (several at a time), or a downloaded video's frame
+   is grabbed. Nothing new starts while something is being fetched. */
+static void thumb_ask(const char **ids, int n) {
+    if (!TC) { TC = (Thumb *)calloc(TH_SLOTS, sizeof(Thumb)); if (!TC) return; }
+    if (th_pid > 0) return;
+    const char *get[TH_BATCH]; Thumb *gs[TH_BATCH]; int ng = 0, reads = 0;
+    for (int i = 0; i < n; i++) {
+        const char *id = ids[i];
+        if (!thumb_valid(id) || thumb_find(id)) continue;
+        if (!strncmp(id, "local:", 6)) {
+            if (i) continue;   /* frames only for the selected row: they take a moment */
+            Thumb *th = thumb_slot(id); if (!th) return;
+            if (local_thumb_load(th, id + 6) == 0) { th->state = 2; continue; }
+            pid_t pid = fork();
+            if (pid == 0) { int nul = open("/dev/null", 1); if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); } local_thumb_grab(id + 6); }
+            if (pid > 0) { th_pid = pid; th_slot = (int)(th - TC); th_started = now_s(); th_nbatch = 0; } else th->state = 3;
+            return;
+        }
+        char fin[800]; thumb_cache(fin, sizeof fin, id, ".jpg");
+        if (reads < 2 && access(fin, F_OK) == 0) {   /* kept from before */
+            Thumb *th = thumb_slot(id); if (!th) return;
+            reads++;
+            if (thumb_decode(th, fin) == 0) { th->state = 2; continue; }
+            unlink(fin); th->state = 0;
+        }
+        if (ng < TH_BATCH) { Thumb *th = thumb_slot(id); if (!th) break; get[ng] = id; gs[ng++] = th; }
     }
-    static char cmd[2600]; char out[64], qo[100], tls[900];
-    thumb_path(out, sizeof out); unlink(out); shq(qo, sizeof qo, out); curl_tls(tls, sizeof tls);
-    snprintf(cmd, sizeof cmd, "%s exec %s -sSL --fail --connect-timeout 10 --max-time 20 --max-filesize 262144 -A ArchiveTV-Miyoo %s -o %s '%s'",
-             CURL_ENV, CURL_BIN, tls, qo, id);
+    if (!ng) return;
+    char dir[700]; snprintf(dir, sizeof dir, "%s/thumbs", appdir); mkdir(dir, 0755);
+    /* our own curl first: it can fetch several at once (-Z) */
+    char own[700]; snprintf(own, sizeof own, "%s/bin/curl", appdir);
+    int par = access(own, X_OK) == 0;
+    static char cmd[8000]; char tls[900]; curl_tls(tls, sizeof tls);
+    int k = snprintf(cmd, sizeof cmd, "%s exec %s -sSL --fail %s--connect-timeout 10 --max-time 15 --max-filesize 262144 -A ArchiveTV-Miyoo %s",
+                     CURL_ENV, par ? own : CURL_BIN, par ? "-Z --parallel-max 4 " : "", tls);
+    th_nbatch = 0;
+    for (int i = 0; i < ng && (par || i == 0); i++) {
+        char tmp[800], qt[900]; thumb_cache(tmp, sizeof tmp, get[i], ".tmp"); unlink(tmp); shq(qt, sizeof qt, tmp);
+        k += snprintf(cmd + k, sizeof cmd - (size_t)k, " -o %s '%s'", qt, get[i]);
+        th_batch[th_nbatch++] = (int)(gs[i] - TC);
+    }
+    for (int i = th_nbatch; i < ng; i++) gs[i]->state = 0;   /* not this time */
     pid_t pid = fork();
     if (pid == 0) { int nul = open("/dev/null", 1); if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); } execl("/bin/sh", "sh", "-c", cmd, (char *)0); _exit(127); }
-    if (pid > 0) { th_pid = pid; th_slot = s; th_started = t; } else th->state = 3;
-    return th;
+    if (pid > 0) { th_pid = pid; th_started = now_s(); }
+    else { for (int i = 0; i < th_nbatch; i++) TC[th_batch[i]].state = 3; th_nbatch = 0; }
 }
 
 /* ---------- settings + about ---------- */
@@ -3554,6 +3619,12 @@ int main(int argc, char **argv) {
     av_register_all();
     ui_app_version = app_version();
     upd_start_check();
+    {   /* the kept pictures: start over once there are a lot (each is only a few KB) */
+        char d[700]; snprintf(d, sizeof d, "%s/thumbs", appdir);
+        DIR *dd = opendir(d); int cnt = 0;
+        if (dd) { struct dirent *de; while ((de = readdir(dd))) cnt++; closedir(dd); }
+        if (cnt > 1500) { rm_rf(d); logf_("thumbs: cleared the kept pictures (%d)", cnt); }
+    }
 
     static const char *SAY[] = {
         "Let's watch old TV!", "Old TV was better, right?", "Hey, let's go back in time!",

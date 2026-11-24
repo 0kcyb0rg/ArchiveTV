@@ -16,7 +16,7 @@ lines = ['archivetv-update 1', 'version ' + version,
          'base https://raw.githubusercontent.com/mroxfordyazuka/ArchiveTV/%s/App/ArchiveTV/' % commit]
 total = 0
 for folder, dirs, names in sorted(os.walk(app)):
-    dirs[:] = sorted(d for d in dirs if d not in ('update', 'videos', 'playlists'))
+    dirs[:] = sorted(d for d in dirs if d not in ('update', 'videos', 'playlists', 'thumbs'))
     for name in sorted(names):
         rel = os.path.relpath(os.path.join(folder, name), app).replace(os.sep, '/')
         if name in skip or name.startswith('._') or rel == 'music/music.raw':
