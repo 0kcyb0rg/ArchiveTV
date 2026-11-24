@@ -76,6 +76,7 @@ FILES TAB
   playlist named after it, in episode order. Episodes you download later
   join it by themselves.
   Y marks videos (+). Then A: add all the marked ones to a playlist, or delete them.
+  X changes the order: newest download first, A to Z, biggest first.
 
 PLAYING
   A / START pause        LEFT/RIGHT -/+10 s     DOWN/UP or L1/R1 -/+1 min

@@ -232,6 +232,8 @@ static const char *thumb_of_item(const char *id);
 static int g_thumbs = 1;   /* Settings > Thumbnails */
 typedef const char *(*ThumbFn)(int row);
 static ThumbFn g_thumb_fn = 0;   /* set right before a list_loop whose rows have Internet Archive items */
+static int g_dsort = 0;   /* Files tab order, see cmp_df */
+static int natcmp(const char *a, const char *b);
 static int g_exit_code = 0;   /* 42 = launch.sh installs a downloaded update and starts the app again */
 static void upd_poll(void);
 static const char *upd_note(void);
@@ -798,7 +800,7 @@ typedef struct { char name[400]; char fmt[40]; char disp[200]; long long size; i
 static VFile *files; static int nfiles = 0;
 static char item_title[200], item_title8[300];
 
-typedef struct { char name[300]; char disp[200]; long long size; } DFile;
+typedef struct { char name[300]; char disp[200]; long long size; long mtime; } DFile;
 static DFile *dfiles; static int ndf = 0;
 
 static void load_channels(void) {
@@ -1843,7 +1845,7 @@ static void settings_save(int tab) {
     if (tab >= 0) g_tab = tab;
     char p[700]; snprintf(p, sizeof p, "%s/settings.txt", appdir);
     FILE *f = fopen(p, "w"); if (!f) return;
-    fprintf(f, "theme %d\ntab %d\nscreen %d\nmusic %d\nsounds %d\nvsync %d\ngroup %d\nautooff %d\nthumbs %d\nsubs %d\naspect %d\n", g_theme, g_tab, g_fx, g_music, g_sounds, g_vsync, g_group, g_autooff, g_thumbs, g_subs, g_aspect);
+    fprintf(f, "theme %d\ntab %d\nscreen %d\nmusic %d\nsounds %d\nvsync %d\ngroup %d\nautooff %d\nthumbs %d\nsubs %d\naspect %d\nfsort %d\n", g_theme, g_tab, g_fx, g_music, g_sounds, g_vsync, g_group, g_autooff, g_thumbs, g_subs, g_aspect, g_dsort);
     fclose(f);
 }
 /* reads one setting before everything else is up (the screen mode is picked before settings_load) */
@@ -1870,6 +1872,7 @@ static void settings_load(void) {
         else if (!strncmp(line, "autooff ", 8)) g_autooff = atoi(line + 8) != 0;
         else if (!strncmp(line, "thumbs ", 7)) g_thumbs = atoi(line + 7) != 0;
         else if (!strncmp(line, "subs ", 5)) g_subs = atoi(line + 5) != 0;
+        else if (!strncmp(line, "fsort ", 6)) { g_dsort = atoi(line + 6); if (g_dsort < 0 || g_dsort > 2) g_dsort = 0; }
         else if (!strncmp(line, "aspect ", 7)) { g_aspect = atoi(line + 7); if (g_aspect < 0 || g_aspect > 2) g_aspect = 0; }
     }
     fclose(f);
@@ -2077,7 +2080,24 @@ static void scan_parts(void) {
     }
     closedir(d);
 }
-static int cmp_df(const void *a, const void *b) { return strcasecmp(((const DFile *)a)->disp, ((const DFile *)b)->disp); }
+/* Files tab order (X): 0 = newest download first, 1 = A to Z (episode order), 2 = biggest first */
+static const char *const DSORT_NAME[3] = { "Sorted: newest first", "Sorted: A to Z", "Sorted: biggest first" };
+static int st_ok = -1;   /* the stat64 layout checked against the real size once */
+static long file_mtime(const char *path, long long size) {
+    if (!st_ok) return 0;
+    uint64_t b[24]; memset(b, 0, sizeof b);
+    if (__xstat64(3, path, b) != 0) return 0;
+    const uint8_t *q = (const uint8_t *)b;
+    long long sz; long mt; memcpy(&sz, q + 48, 8); memcpy(&mt, q + 80, 4);
+    if (st_ok < 0) { st_ok = sz == size; if (!st_ok) logf_("files: can't read dates here (stat size %lld, real %lld)", sz, size); }
+    return st_ok ? mt : 0;
+}
+static int cmp_df(const void *a, const void *b) {
+    const DFile *x = a, *y = b;
+    if (g_dsort == 0 && x->mtime != y->mtime) return x->mtime > y->mtime ? -1 : 1;
+    if (g_dsort == 2 && x->size != y->size) return x->size > y->size ? -1 : 1;
+    return natcmp(x->disp, y->disp);
+}
 static void scan_downloads(void) {
     scan_parts();
     if (!dfiles) dfiles = (DFile *)calloc(500, sizeof(DFile));
@@ -2097,6 +2117,7 @@ static void scan_downloads(void) {
         l1(f->disp, sizeof f->disp, u ? u + 2 : n);
         char p[1000]; snprintf(p, sizeof p, "%s/%s", viddir, n);
         f->size = file_size(p);
+        f->mtime = file_mtime(p, f->size);
         ndf++;
     }
     closedir(d);
@@ -2774,11 +2795,18 @@ static const char *thumb_irow(int r) { if (r >= nirow) return 0; int v = irow[r]
 static void screen_series_files(const char *id, int sid) {
     char title[120]; snprintf(title, sizeof title, "%s", g_ser[sid].show);
     ngmem = series_members(nfiles, sid, gmem, fname_i);
-    int sel = 0; const char *status = "";
+    int sel = 0, best = 0; const char *status = "";
     for (;;) {
         g_thumb_fn = thumb_gmem;
-        int k = list_loop(title, ngmem, lbl_gmem, "A:Menu  START:Watch  B:Back", &sel, "Nothing here.", &status);
+        int k = list_loop(title, ngmem, lbl_gmem, "A:Menu  X:Sort  START:Watch", &sel, "Nothing here.", &status);
         if (k == K_B || k == K_MENU) return;
+        if (k == K_X) {   /* episode order <-> best quality first */
+            best = !best;
+            if (best) { for (int i = 1; i < ngmem; i++) for (int j = i; j > 0 && cmp_file(&files[gmem[j]], &files[gmem[j - 1]]) < 0; j--) { int t = gmem[j]; gmem[j] = gmem[j - 1]; gmem[j - 1] = t; } }
+            else ngmem = series_members(nfiles, sid, gmem, fname_i);
+            sel = 0; sfx(SFX_TOGGLE); status = best ? "Sorted: best quality first" : "Sorted: episode order";
+            continue;
+        }
         status = "";
         if (ngmem) file_act(id, gmem[sel], k, &status);
     }
@@ -3926,7 +3954,7 @@ static const char *FOOT[6] = {
     "A:Open  L/R:Tab",
     "A:Menu  START:Open  L/R:Tab",
     "A:Open  X:Delete  L/R:Tab",
-    "A:Menu  Y:Mark  START:Play",
+    "A:Menu  X:Sort  Y:Mark",
     "A:Change  L/R:Tab",
 };
 static const char *EMPTY[6] = { 0, "No guide.txt found.", "Nothing saved yet.\nPress Y on a show to save it.", 0, "Nothing yet.\nDownloads show up here.", 0 };
@@ -3944,6 +3972,11 @@ static void home(void) {
         if (k == K_L1 || k == K_R1) { tab = (tab + (k == K_R1 ? 1 : 5)) % 6; armed = -1; status = ""; settings_save(tab); continue; }
         if (k == K_MENU || g_quit) return;
         /* X = delete/remove with a second press to confirm */
+        if (k == K_X && tab == 4) {   /* Files: X changes the order (delete is in the A menu) */
+            g_dsort = (g_dsort + 1) % 3; sfx(SFX_TOGGLE); status = DSORT_NAME[g_dsort];
+            sels[tab] = 0; settings_save(-1);
+            continue;
+        }
         if (k == K_X) {
             int can = (tab == 0 && sel >= 2) || (tab == 2 && sel < nchan) || (tab == 3 && sel >= 1) || (tab == 4 && sel < n);
             if (tab == 4 && armed != sel && sel >= nq && sel < nq + npart) { armed = sel; status = "Press X again to delete the partial download"; continue; }

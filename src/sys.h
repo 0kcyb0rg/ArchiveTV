@@ -22,6 +22,7 @@ size_t fread(void *, size_t, size_t, FILE *);
 size_t fwrite(const void *, size_t, size_t, FILE *);
 int fseek(FILE *, long, int);
 int truncate(const char *, long);
+int __xstat64(int, const char *, void *);   /* glibc: struct stat64 (ARM EABI layout: size at 48, mtime at 80) */
 long ftell(FILE *);
 char *fgets(char *, int, FILE *);
 int fputs(const char *, FILE *);
