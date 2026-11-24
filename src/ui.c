@@ -326,9 +326,8 @@ static void cursor(int x, int y, double t) {
     for (int i = 0; i < 5; i++) R(x + i, y + i, 1, 11 - 2 * i, NAVY);
     for (int i = 0; i < 3; i++) R(x + 1 + i, y + 2 + i, 1, 7 - 2 * i, PINK);
 }
-void ui_thumb(const uint32_t *px, int w, int h, int sel_vis, double age, double t) {
+void ui_thumb(const uint32_t *px, int w, int h, int sel_vis, double t) {
     B = T;
-    if (!px || w <= 0 || h <= 0) return;
     int bw = 94, bh = 72;                                   /* virtual: a 176x132 picture plus the frame */
     int lx = 4, ly = 38, lh = UVIS * UROWH + 12;
     int x = lx + (UW - 8) - bw - 6;
@@ -336,7 +335,7 @@ void ui_thumb(const uint32_t *px, int w, int h, int sel_vis, double age, double 
     win(x, y, bw, bh, NAVY);
     int rx = x * 2 + 6, ry = y * 2 + 6, rw = bw * 2 - 12, rh = bh * 2 - 12;
     rr(T, rx, ry, rw, rh, 0);
-    if (age < 0.18) {                                       /* tuning in */
+    if (!px || w <= 0 || h <= 0) {                          /* still on its way: tuning in */
         unsigned seed = (unsigned)(t * 1000) * 2654435761u;
         for (int j = 0; j < rh; j += 2)
             for (int i = 0; i < rw; i += 2) {

@@ -221,7 +221,8 @@ static void queue_tick(void);
 #define TH_SLOTS 32
 typedef struct { char id[600]; int state, w, h; uint32_t px[TH_MAXW * TH_MAXH]; double used; } Thumb;   /* id = the picture's address */   /* state 1 = fetching, 2 = ready, 3 = none */
 static void th_poll(void);
-static Thumb *thumb_want(const char *url);
+static pid_t th_pid = 0;   /* the picture being fetched */
+static Thumb *thumb_want(const char *url, int *waiting);
 static const char *thumb_of_item(const char *id);
 static int g_thumbs = 1;   /* Settings > Thumbnails */
 typedef const char *(*ThumbFn)(int row);
@@ -246,7 +247,6 @@ static int list_loop_t(const char *title, int n, LabelFn fn, const char *footer,
     static char mains[16][400], sides[16][48];
     URow rows_v[16];
     ThumbFn thf = g_thumb_fn; g_thumb_fn = 0;   /* this list's preview pictures (screens set it each time) */
-    const char *th_for = 0; double th_t = 0;
     SDL_EnableKeyRepeat(300, 70);
     for (;;) {
         SDL_Event e;
@@ -323,12 +323,17 @@ static int list_loop_t(const char *title, int n, LabelFn fn, const char *footer,
         else ui_header(title, cnt, t, MOOD_HAPPY);
         (void)tsel; ui_list(rows_v, n, *sel, top, (int)moff, t, empty);
         th_poll();
-        if (thf && n && t - tsel > 0.3) {   /* resting on a row: show its picture */
-            const char *id = thf(*sel);
-            Thumb *th = id ? thumb_want(id) : 0;
-            if (th) { if (th_for != th->id) { th_for = th->id; th_t = t; } ui_thumb(th->px, th->w, th->h, *sel - top, t - th_t, t); }
-            else th_for = 0;
-        } else th_for = 0;
+        if (thf && n) {   /* the selected row's picture (static while it comes), then the next rows' ahead of time */
+            const char *id = thf(*sel); int wait = 0;
+            Thumb *th = id ? thumb_want(id, &wait) : 0;
+            if (th && th->state == 2) ui_thumb(th->px, th->w, th->h, *sel - top, t);
+            else if (wait || (th && th->state == 1)) ui_thumb(0, 0, 0, *sel - top, t);
+            if (th_pid <= 0 && th && th->state >= 2 && t - tsel > 0.15)
+                for (int d = 1; d <= 4 && th_pid <= 0; d++) {
+                    int r = *sel + (d == 4 ? -1 : d); if (r < 0 || r >= n) continue;
+                    const char *pid_ = thf(r); int w2; if (pid_) thumb_want(pid_, &w2);
+                }
+        }
         if (theme_msg && t - theme_t < 1.5) ui_toast(theme_msg);
         else if (note && t - note_t < 4) ui_toast(note);
         else if (status && *status && **status) ui_toast(*status);
@@ -3116,7 +3121,7 @@ static void app_update(void) {
    archive.org/services/img/<id> is a small JPEG for most items (collections often have a PNG or GIF logo; those
    are skipped). One is fetched at a time, only after the cursor has rested on a row, and kept for this run. */
 static Thumb *TC;
-static pid_t th_pid = 0; static int th_slot = -1;
+static int th_slot = -1;
 static void *th_cc; static AVFrame *th_fr;
 static int thumb_ok_id(const char *id) {
     if (!id || !id[0] || strlen(id) >= 120) return 0;
@@ -3191,13 +3196,17 @@ static const char *thumb_of_item(const char *id) {
     k = (k + 1) & 7; snprintf(u[k], sizeof u[k], "https://archive.org/services/img/%s", id);
     return u[k];
 }
-static Thumb *thumb_want(const char *id) {   /* id: the address (https://archive.org/...) */
+/* the picture at this address (https://archive.org/...): its slot once asked for (state 1 = on its way,
+   2 = here, 3 = there's none), else 0 with *waiting = 1 while another fetch runs. Starts a fetch if none is running. */
+static Thumb *thumb_want(const char *id, int *waiting) {
+    *waiting = 0;
     if (!g_thumbs || !has_wifi || !id || strncmp(id, "https://archive.org/", 20) || strlen(id) >= sizeof TC[0].id || strchr(id, '\'')) return 0;
     if (!TC) { TC = (Thumb *)calloc(TH_SLOTS, sizeof(Thumb)); if (!TC) return 0; }
     double t = now_s();
     for (int i = 0; i < TH_SLOTS; i++)
-        if (TC[i].state && !strcmp(TC[i].id, id)) { TC[i].used = t; return TC[i].state == 2 ? &TC[i] : 0; }
-    if (th_pid > 0 || access(CURL_BIN, F_OK) != 0) return 0;   /* one at a time */
+        if (TC[i].state && !strcmp(TC[i].id, id)) { TC[i].used = t; return &TC[i]; }
+    if (access(CURL_BIN, F_OK) != 0) return 0;
+    if (th_pid > 0) { *waiting = 1; return 0; }   /* one at a time */
     int s = 0;
     for (int i = 0; i < TH_SLOTS; i++) { if (!TC[i].state) { s = i; break; } if (TC[i].used < TC[s].used) s = i; }
     Thumb *th = &TC[s];
@@ -3209,7 +3218,7 @@ static Thumb *thumb_want(const char *id) {   /* id: the address (https://archive
     pid_t pid = fork();
     if (pid == 0) { int nul = open("/dev/null", 1); if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); } execl("/bin/sh", "sh", "-c", cmd, (char *)0); _exit(127); }
     if (pid > 0) { th_pid = pid; th_slot = s; } else th->state = 3;
-    return 0;
+    return th;
 }
 
 /* ---------- settings + about ---------- */
