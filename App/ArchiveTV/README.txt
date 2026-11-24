@@ -73,7 +73,8 @@ FILES TAB
   Paused downloads keep what they have and pick up where they stopped.
   Videos: Play, Add to playlist, Playlist of "<show>", Delete. START plays.
   Playlist of "<show>" puts every downloaded episode of that show into a
-  playlist named after it, in episode order.
+  playlist named after it, in episode order. Episodes you download later
+  join it by themselves.
   Y marks videos (+). Then A: add all the marked ones to a playlist, or delete them.
 
 PLAYING

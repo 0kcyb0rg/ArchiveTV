@@ -223,7 +223,8 @@ static void queue_tick(void);
 typedef struct { char id[600]; int state, w, h; uint32_t px[TH_MAXW * TH_MAXH]; double used; } Thumb;   /* id = the picture's address */   /* state 1 = fetching, 2 = ready, 3 = none */
 static void th_poll(void);
 static void local_thumb_drop(const char *name);
-static void video_delete(const char *name);   /* a downloaded video and everything kept with it */
+static void video_delete(const char *name);
+static void pl_auto_add(const char *dst);   /* a downloaded video and everything kept with it */
 static pid_t th_pid = 0;   /* the picture being fetched */
 static Thumb *thumb_want(const char *url, int *waiting);
 static void thumb_ask(const char **ids, int n);
@@ -366,6 +367,8 @@ static int menu_pick(const char *title, const char *const *items, int n) {
             switch (e.key.keysym.sym) {
             case K_UP: sel = (sel + n - 1) % n; sfx(SFX_MOVE); break;
             case K_DOWN: sel = (sel + 1) % n; sfx(SFX_MOVE); break;
+            case K_LEFT: case K_L1: sel = sel > 8 ? sel - 8 : 0; sfx(SFX_MOVE); break;          /* a page at a time */
+            case K_RIGHT: case K_R1: sel = sel + 8 < n ? sel + 8 : n - 1; sfx(SFX_MOVE); break;
             case K_A: case K_START: sfx(SFX_SELECT); SDL_EnableKeyRepeat(0, 0); return sel;
             case K_B: case K_MENU: sfx(SFX_BACK); SDL_EnableKeyRepeat(0, 0); return -1;
             default: break;
@@ -1958,9 +1961,11 @@ static void q_pause(int i, int pause) {
 /* called often from every screen: finishes and starts queued downloads */
 static void queue_tick(void) {
     if (DLW.state == 2 && !SR.in_player) sfx(SFX_DONE);
+    if (DLW.state == 2) pl_auto_add(DLW.dst);
     dl_reap(&DLW);
     if (DLQ.state == 2 || DLQ.state == 3) {
         int ok = DLQ.state == 2;
+        if (ok) pl_auto_add(DLQ.dst);
         dl_reap(&DLQ);
         sfx(ok ? SFX_DONE : SFX_ERROR);
         if (q_active >= 0 && q_active < nq) {
@@ -2242,14 +2247,16 @@ static int keyboard(const char *title, char *text, size_t cap) { return keyboard
 /* ---------- playlists: playlists/<name>.txt, one "id<TAB>file<TAB>title" per line ---------- */
 typedef struct { char id[128]; char name[400]; char disp[200]; } PE;
 static char pldir[600];
-static char pls[60][64]; static int npl = 0;
+#define PLMAX 300
+static char pls[PLMAX][64]; static int npl = 0;
 static PE *ple; static int nple = 0;
+static char ple_show[100];   /* "#show <key>" first line: made by "Playlist of", new episodes join it by themselves */
 static int cmp_str(const void *a, const void *b) { return strcasecmp((const char *)a, (const char *)b); }
 static void pl_scan(void) {
     npl = 0;
     DIR *d = opendir(pldir); if (!d) return;
     struct dirent *de;
-    while ((de = readdir(d)) && npl < 60) {
+    while ((de = readdir(d)) && npl < PLMAX) {
         size_t L = strlen(de->d_name);
         if (de->d_name[0] == '.' || L < 5 || L > 60 || strcasecmp(de->d_name + L - 4, ".txt")) continue;
         memcpy(pls[npl], de->d_name, L - 4); pls[npl][L - 4] = 0;
@@ -2261,12 +2268,13 @@ static void pl_scan(void) {
 static void pl_path(char *p, size_t cap, const char *name) { snprintf(p, cap, "%s/%s.txt", pldir, name); }
 static int pl_load(const char *name) {
     if (!ple) ple = (PE *)calloc(300, sizeof(PE));
-    nple = 0;
+    nple = 0; ple_show[0] = 0;
     char p[800]; pl_path(p, sizeof p, name);
     FILE *f = fopen(p, "r"); if (!f) return -1;
     char line[900];
     while (nple < 300 && fgets(line, sizeof line, f)) {
         line[strcspn(line, "\r\n")] = 0;
+        if (!strncmp(line, "#show ", 6)) { snprintf(ple_show, sizeof ple_show, "%s", line + 6); continue; }
         char *a = line, *b = strchr(a, '\t'); if (!b) continue; *b++ = 0;
         char *c = strchr(b, '\t'); if (c) *c++ = 0;
         snprintf(ple[nple].id, sizeof ple[nple].id, "%s", a);
@@ -2280,6 +2288,7 @@ static int pl_load(const char *name) {
 static void pl_save(const char *name) {
     char p[800]; pl_path(p, sizeof p, name);
     FILE *f = fopen(p, "w"); if (!f) return;
+    if (ple_show[0]) fprintf(f, "#show %s\n", ple_show);
     for (int i = 0; i < nple; i++) fprintf(f, "%s\t%s\t%s\n", ple[i].id, ple[i].name, ple[i].disp);
     fclose(f); sync();
 }
@@ -2305,7 +2314,7 @@ static int pl_new(char *out, size_t cap) {
 /* asks which playlist; returns 1 with the name */
 static int pl_choose(char *out, size_t cap) {
     pl_scan();
-    const char *items[62]; int n = 0;
+    static const char *items[PLMAX + 2]; int n = 0;
     items[n++] = "+ New playlist...";
     for (int i = 0; i < npl; i++) items[n++] = pls[i];
     int k = menu_pick("Add to playlist", items, n);
@@ -3125,29 +3134,70 @@ static int dfile_pl_add(const char *pl, int i) {
     return pl_append(pl, id[0] ? id : "local", u ? u + 2 : nm, dfiles[i].disp);
 }
 static const char *dfile_disp(int i) { return dfiles[i].disp; }
-/* "Make a playlist of this show": every downloaded episode of the show the video at i belongs to, in episode
-   order, into a playlist named after the show (new ones are added to the end if it's there already) */
+/* playlist entries of one show in episode order (others keep their place after them) */
+static const char *ple_disp(int i) { return ple[i].disp; }
+static void ple_sort(void) {
+    if (nple < 2) return;
+    int *ix = malloc(sizeof(int) * (size_t)nple); PE *cp = malloc(sizeof(PE) * (size_t)nple);
+    if (!ix || !cp) { free(ix); free(cp); return; }
+    for (int i = 0; i < nple; i++) ix[i] = i;
+    g_mname = ple_disp; qsort(ix, (size_t)nple, sizeof(int), cmp_members);
+    for (int i = 0; i < nple; i++) cp[i] = ple[ix[i]];
+    memcpy(ple, cp, sizeof(PE) * (size_t)nple);
+    free(ix); free(cp);
+}
+/* adds a downloaded video (its card name "<id>__<file>") to the playlist in ple, unless it's there; 1 = added */
+static int ple_add_card(const char *card) {
+    const char *u = strstr(card, "__"), *file = u ? u + 2 : card;
+    for (int e = 0; e < nple; e++) if (!strcmp(ple[e].name, file)) return 0;
+    if (nple >= 300) return 0;
+    PE *x = &ple[nple];
+    if (u) { size_t il = (size_t)(u - card); if (il >= sizeof x->id) il = sizeof x->id - 1; memcpy(x->id, card, il); x->id[il] = 0; }
+    else snprintf(x->id, sizeof x->id, "local");
+    clean_line(x->name, sizeof x->name, file);
+    char d[200]; l1(d, sizeof d, file); clean_line(x->disp, sizeof x->disp, d);
+    nple++;
+    return 1;
+}
+/* "Playlist of <show>": every downloaded episode of the show the video at i belongs to, in episode order, in a
+   playlist named after the show. It remembers the show, so episodes downloaded later join it by themselves. */
 static int pl_of_show(int i, char *name, size_t cap) {
     char key[96], show[120], k2[96], s2[120];
     if (!series_key(dfiles[i].disp, key, sizeof key, show, sizeof show)) return -1;
-    int *mem = calloc((size_t)ndf, sizeof(int)); if (!mem) return -1;
-    int n = 0;
-    for (int j = 0; j < ndf; j++) if (series_key(dfiles[j].disp, k2, sizeof k2, s2, sizeof s2) && !strcmp(k2, key)) mem[n++] = j;
-    g_mname = dfile_disp; qsort(mem, (size_t)n, sizeof(int), cmp_members);
     for (char *c = show; *c; c++) if (strchr("\\/:*?\"<>|.", *c)) *c = '_';
     show[40] = 0;
     snprintf(name, cap, "%s", show);
-    pl_load(name);   /* what's in it already (none if it's new) */
-    char p[800]; pl_path(p, sizeof p, name);
-    { FILE *f = fopen(p, "a"); if (f) fclose(f); }
+    if (!ple) ple = (PE *)calloc(300, sizeof(PE));
+    if (!ple) return -1;
+    if (pl_load(name) < 0) { nple = 0; ple_show[0] = 0; }
+    snprintf(ple_show, sizeof ple_show, "%s", key);
     int added = 0;
-    for (int k = 0; k < n; k++) {
-        const char *u = strstr(dfiles[mem[k]].name, "__"), *file = u ? u + 2 : dfiles[mem[k]].name;
-        int have = 0; for (int e = 0; e < nple; e++) if (!strcmp(ple[e].name, file)) { have = 1; break; }
-        if (!have && dfile_pl_add(name, mem[k]) == 0) added++;
-    }
-    free(mem);
+    for (int j = 0; j < ndf; j++)
+        if (series_key(dfiles[j].disp, k2, sizeof k2, s2, sizeof s2) && !strcmp(k2, key)) added += ple_add_card(dfiles[j].name);
+    ple_sort(); pl_save(name);
     return added;
+}
+/* a download just finished: if a show playlist is waiting for this show, it joins it, in order */
+static void pl_auto_add(const char *dst) {
+    const char *base = strrchr(dst, '/'); base = base ? base + 1 : dst;
+    const char *u = strstr(base, "__");
+    char disp[200], key[96], show[120]; l1(disp, sizeof disp, u ? u + 2 : base);
+    if (!series_key(disp, key, sizeof key, show, sizeof show)) return;
+    /* this can run while a playlist is open on screen: work on a copy and put that one back after */
+    PE *keep = ple; int keep_n = nple; char keep_show[100]; snprintf(keep_show, sizeof keep_show, "%s", ple_show);
+    ple = (PE *)calloc(300, sizeof(PE)); if (!ple) { ple = keep; return; }
+    pl_scan();
+    for (int i = 0; i < npl; i++) {
+        char p[800], line[160] = ""; pl_path(p, sizeof p, pls[i]);
+        FILE *f = fopen(p, "r"); if (!f) continue;
+        if (!fgets(line, sizeof line, f)) line[0] = 0;
+        fclose(f);
+        line[strcspn(line, "\r\n")] = 0;
+        if (strncmp(line, "#show ", 6) || strcmp(line + 6, key)) continue;
+        if (pl_load(pls[i]) < 0) continue;
+        if (ple_add_card(base)) { ple_sort(); pl_save(pls[i]); logf_("playlist %s: added %s", pls[i], base); }
+    }
+    free(ple); ple = keep; nple = keep_n; snprintf(ple_show, sizeof ple_show, "%s", keep_show);
 }
 static void lbl_tab_files(int i, char *m, size_t mc, char *s, size_t sc, int *tone) {
     if (i < nq) {

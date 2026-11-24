@@ -272,7 +272,7 @@ void ui_footer_badge(const char *b) { snprintf(foot_badge, sizeof foot_badge, "%
 /* touch: where things were last drawn, in virtual pixels */
 static int tab_x0[16], tab_x1[16], ntab_hit;
 static int foot_x0[10], foot_x1[10], nfoot; static char foot_k[10][8];
-static int menu_x, menu_y, menu_w, menu_h, menu_n;
+static int menu_x, menu_y, menu_w, menu_h, menu_n, menu_top;
 void ui_footer(const char *hints) {
     B = T;
     win(4, UH - 26, UW - 8, 22, CREAM);
@@ -631,22 +631,29 @@ void ui_menu(const char *title, const char *const *items, int n, int sel, double
     B = T;
     int maxl = txtw(title, 30);
     for (int i = 0; i < n; i++) { int l = txtw(items[i], 30) + 10; if (l > maxl) maxl = l; }
-    int w = maxl + 40, h = n * UROWH + 34;
+    int vis = (UH - 50) / UROWH;                       /* a long list scrolls, keeping the choice in view */
+    if (vis > n) vis = n;
+    int top = sel - vis / 2;
+    if (top > n - vis) top = n - vis;
+    if (top < 0) top = 0;
+    int w = maxl + 40, h = vis * UROWH + 34;
     if (w < 160) w = 160;
     int x = (UW - w) / 2, y = (UH - h) / 2;
-    menu_x = x; menu_y = y; menu_w = w; menu_h = h; menu_n = n;
+    menu_x = x; menu_y = y; menu_w = w; menu_h = h; menu_n = n; menu_top = top;
     win(x, y, w, h, WHITE);
     R(x + 2, y + 2, w - 4, 20, CREAM);
     R(x + 2, y + 22, w - 4, 1, NAVY);
     txt(x + 10, y + 4, title, TEXT, 30);
-    for (int i = 0; i < n; i++) {
-        int ry = y + 27 + i * UROWH;
+    for (int i = top; i < top + vis; i++) {
+        int ry = y + 27 + (i - top) * UROWH;
         if (i == sel) {
             R(x + 5, ry, w - 10, UROWH, HILITE); R(x + 4, ry + 1, w - 8, UROWH - 2, HILITE);
             cursor(x + 7, ry + 3, t);
         }
         txt(x + 20, ry + 1, items[i], i == sel ? HITEXT : TEXT, 30);
     }
+    if (top > 0) txt(x + w - 16, y + 4, "^", TEXT, 1);                 /* more above / below */
+    if (top + vis < n) txt(x + w - 16, y + h - 14, "v", TEXT, 1);
 }
 
 /* start screen: the mascot says something in a speech bubble */
@@ -718,7 +725,7 @@ const char *ui_hit_footer(int vx, int vy) {   /* the button name of the footer h
 int ui_hit_menu(int vx, int vy) {   /* item index, -1 = inside the box but no item, -2 = outside */
     if (vx < menu_x || vx >= menu_x + menu_w || vy < menu_y || vy >= menu_y + menu_h) return -2;
     if (vy < menu_y + 27) return -1;
-    int i = (vy - menu_y - 27) / UROWH;
+    int i = menu_top + (vy - menu_y - 27) / UROWH;
     return i < menu_n ? i : -1;
 }
 int ui_hit_kb(int vx, int vy, int *kx, int *ky) {   /* 1 if a key of ui_keyboard is under the finger */
