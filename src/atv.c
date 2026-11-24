@@ -3279,7 +3279,7 @@ static int crc_file(const char *path, unsigned *crc, long long *size) {
 static int upd_path_ok(const char *p) {
     if (!p[0] || p[0] == '/' || strstr(p, "..")) return 0;
     for (const char *c = p; *c; c++) if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == '.' || *c == '_' || *c == '-' || *c == '/')) return 0;
-    static const char *const MINE[] = { "settings.txt", "queue.txt", "searches.txt", "channels.txt", "log.txt", "log.txt.old", "music/music.raw", "update-failed.txt", 0 };
+    static const char *const MINE[] = { "settings.txt", "queue.txt", "searches.txt", "channels.txt", "log.txt", "log.txt.old", "music/music.raw", "update-failed.txt", "thumbs.pack", "thumbs.pack.tmp", 0 };
     for (int i = 0; MINE[i]; i++) if (!strcmp(p, MINE[i])) return 0;
     if (!strncmp(p, "videos/", 7) || !strncmp(p, "playlists/", 10) || !strncmp(p, "update/", 7) || !strncmp(p, "thumbs/", 7)) return 0;
     return 1;
@@ -3492,16 +3492,81 @@ static int thumb_ok_id(const char *id) {
     for (const char *c = id; *c; c++) if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == '.' || *c == '_' || *c == '-')) return 0;
     return 1;
 }
-/* pictures from Internet Archive are kept on the card in thumbs/, named by the CRC-32 of their address */
-static void thumb_cache(char *d, size_t cap, const char *url, const char *ext) {
-    snprintf(d, cap, "%s/thumbs/%08x%s", appdir, crc32_buf(0, (const unsigned char *)url, strlen(url)), ext);
+/* ---- the kept pictures: all in one file, thumbs.pack (hundreds of small files would each take a whole
+   32 KB block of the card) ----
+   Records one after another, newest last: "ATP1", key (CRC-32 of the address), length, kind (1 = JPEG from
+   Internet Archive, 2 = a frame from a downloaded video: width, height (16 bits each), then RGB565 pixels), then
+   the bytes. Past TP_MAX the oldest go, keeping the newest TP_KEEP. A record cut short is dropped. */
+#define TP_MAX (10 << 20)
+#define TP_KEEP (6 << 20)
+typedef struct { unsigned key, off, len, kind; } TPRec;
+static TPRec *tp; static int tpn, tpcap; static unsigned tp_end;
+static void tp_file(char *d, size_t cap) { snprintf(d, cap, "%s/thumbs.pack", appdir); }
+static unsigned tp_key(const char *id) { return crc32_buf(0, (const unsigned char *)id, strlen(id)); }
+static void tp_scan(void) {
+    tpn = 0; tp_end = 0;
+    char p[760]; tp_file(p, sizeof p);
+    long long fl = file_size(p);
+    FILE *f = fopen(p, "rb"); if (!f) return;
+    unsigned h[4];
+    while (fread(h, sizeof h, 1, f) == 1) {
+        unsigned off = tp_end + 16;
+        if (h[0] != 0x31505441 || h[2] > (1u << 20) || (long long)off + h[2] > fl) break;   /* the end, or a record cut short */
+        if (tpn == tpcap) { int nc = tpcap ? tpcap * 2 : 512; TPRec *r = realloc(tp, sizeof(TPRec) * (size_t)nc); if (!r) break; tp = r; tpcap = nc; }
+        tp[tpn].key = h[1]; tp[tpn].off = off; tp[tpn].len = h[2]; tp[tpn].kind = h[3]; tpn++;
+        tp_end = off + h[2];
+        if (fseek(f, (long)tp_end, SEEK_SET) != 0) break;
+    }
+    fclose(f);
+    if (fl > (long long)tp_end) { truncate(p, (long)tp_end); logf_("thumbs: cut %lld bytes off the end of thumbs.pack", fl - tp_end); }
+}
+static void tp_compact(void) {   /* keep the newest TP_KEEP */
+    int k = 0;
+    while (k < tpn && tp_end - (tp[k].off - 16) > TP_KEEP) k++;
+    if (k == 0 || k >= tpn) { if (k >= tpn) { char p[760]; tp_file(p, sizeof p); unlink(p); tp_scan(); } return; }
+    char p[760], q[780]; tp_file(p, sizeof p); snprintf(q, sizeof q, "%s.tmp", p);
+    FILE *in = fopen(p, "rb"), *out = fopen(q, "wb");
+    int ok = in && out && fseek(in, (long)(tp[k].off - 16), SEEK_SET) == 0;
+    static uint8_t buf[65536]; size_t n;
+    while (ok && (n = fread(buf, 1, sizeof buf, in)) > 0) if (fwrite(buf, 1, n, out) != n) ok = 0;
+    if (in) fclose(in);
+    if (out && fclose(out) != 0) ok = 0;
+    if (ok) rename(q, p); else unlink(q);
+    logf_("thumbs: kept the newest %d of %d pictures", tpn - k, tpn);
+    tp_scan();
+}
+static int tp_find(unsigned key) { for (int i = tpn - 1; i >= 0; i--) if (tp[i].key == key) return i; return -1; }
+static int tp_get(int i, uint8_t *buf, size_t cap) {
+    if (i < 0 || tp[i].len > cap) return -1;
+    char p[760]; tp_file(p, sizeof p);
+    FILE *f = fopen(p, "rb"); if (!f) return -1;
+    int ok = fseek(f, (long)tp[i].off, SEEK_SET) == 0 && fread(buf, 1, tp[i].len, f) == tp[i].len;
+    fclose(f);
+    return ok ? (int)tp[i].len : -1;
+}
+static void tp_put(unsigned key, unsigned kind, const void *data, unsigned len) {
+    char p[760]; tp_file(p, sizeof p);
+    FILE *f = fopen(p, "ab"); if (!f) return;
+    unsigned h[4] = { 0x31505441, key, len, kind };
+    int ok = fwrite(h, sizeof h, 1, f) == 1 && fwrite(data, 1, len, f) == len;
+    if (fclose(f) != 0) ok = 0;
+    if (!ok) { tp_scan(); return; }   /* card full? the scan cuts off what didn't make it */
+    if (tpn == tpcap) { int nc = tpcap ? tpcap * 2 : 512; TPRec *r = realloc(tp, sizeof(TPRec) * (size_t)nc); if (!r) return; tp = r; tpcap = nc; }
+    tp[tpn].key = key; tp[tpn].off = tp_end + 16; tp[tpn].len = len; tp[tpn].kind = kind; tpn++;
+    tp_end += 16 + len;
+    if (tp_end > TP_MAX + (4 << 20)) tp_compact();
+}
+static void tp_start(void) {   /* at launch */
+    char d[760];
+    snprintf(d, sizeof d, "%s/thumbs", appdir); if (access(d, F_OK) == 0) rm_rf(d);              /* how 1.5 kept them */
+    snprintf(d, sizeof d, "%s/.thumbs", viddir); if (access(d, F_OK) == 0) rm_rf(d);
+    tp_scan();
+    if (tp_end > TP_MAX) tp_compact();
+    logf_("thumbs: %d kept, %u KB", tpn, tp_end >> 10);
 }
 static int thumb_from_frame(Thumb *th, AVFrame *fr);
-/* the fetched file -> TC[slot].px */
-static int thumb_decode(Thumb *th, const char *path) {
-    FILE *f = fopen(path, "rb"); if (!f) return -1;
-    static uint8_t buf[256 * 1024 + 64];
-    size_t n = fread(buf, 1, sizeof buf - 64, f); fclose(f);
+/* a JPEG in memory -> th->px. buf needs 64 spare bytes after n */
+static int thumb_decode_mem(Thumb *th, uint8_t *buf, size_t n) {
     if (n < 4 || buf[0] != 0xFF || buf[1] != 0xD8) return -1;    /* not a JPEG */
     memset(buf + n, 0, 64);
     if (!th_cc) {
@@ -3515,6 +3580,20 @@ static int thumb_decode(Thumb *th, const char *path) {
     int got = 0;
     if (avcodec_decode_video2(th_cc, th_fr, &got, &pk) < 0 || !got) return -1;
     return thumb_from_frame(th, th_fr);
+}
+static uint8_t th_buf[256 * 1024 + 64];
+/* a kept frame (kind 2) -> th->px */
+static int thumb_from_565(Thumb *th, const uint8_t *d, int n) {
+    if (n < 4) return -1;
+    int w = d[0] | d[1] << 8, h = d[2] | d[3] << 8;
+    if (w <= 0 || h <= 0 || w > TH_MAXW || h > TH_MAXH || n != 4 + w * h * 2) return -1;
+    const uint8_t *q = d + 4;
+    for (int i = 0; i < w * h; i++, q += 2) {
+        unsigned v = q[0] | q[1] << 8, r = v >> 11, g = (v >> 5) & 63, b = v & 31;
+        th->px[i] = ((r << 3 | r >> 2) << 16) | ((g << 2 | g >> 4) << 8) | (b << 3 | b >> 2);
+    }
+    th->w = w; th->h = h;
+    return 0;
 }
 /* a decoded picture -> th->px, scaled down to fit TH_MAXW x TH_MAXH (shape kept, square pixels assumed) */
 static int thumb_from_frame(Thumb *th, AVFrame *fr) {
@@ -3549,18 +3628,8 @@ static int thumb_from_frame(Thumb *th, AVFrame *fr) {
     return 0;
 }
 /* downloaded videos: a frame from 10% in (at most 2 minutes), grabbed by a child process so the menus keep
-   moving, and kept as videos/.thumbs/<file>.rgb for next time */
-static void local_thumb_path(char *d, size_t cap, const char *name) { snprintf(d, cap, "%s/.thumbs/%s.rgb", viddir, name); }
-static int local_thumb_load(Thumb *th, const char *name) {
-    char p[1000]; local_thumb_path(p, sizeof p, name);
-    FILE *f = fopen(p, "rb"); if (!f) return -1;
-    int hd[3] = { 0 }, ok = fread(hd, sizeof hd, 1, f) == 1 && hd[0] == 0x54565441 && hd[1] > 0 && hd[2] > 0 && hd[1] <= TH_MAXW && hd[2] <= TH_MAXH
-                 && fread(th->px, 4, (size_t)(hd[1] * hd[2]), f) == (size_t)(hd[1] * hd[2]);
-    fclose(f);
-    if (!ok) { unlink(p); return -1; }
-    th->w = hd[1]; th->h = hd[2];
-    return 0;
-}
+   moving; the parent keeps it in thumbs.pack */
+#define FRAME_TMP "/tmp/archivetv-frame.raw"
 static void local_thumb_grab(const char *name) {   /* runs in the child; its exit code says how it went */
     static Thumb tmp;
     char v[1000]; snprintf(v, sizeof v, "%s/%s", viddir, name);
@@ -3583,15 +3652,24 @@ static void local_thumb_grab(const char *name) {   /* runs in the child; its exi
         av_free_packet(&pk);
     }
     if (!got || thumb_from_frame(&tmp, fr) != 0) _exit(6);
-    char p[1000], q[1010]; snprintf(p, sizeof p, "%s/.thumbs", viddir); mkdir(p, 0755);
-    local_thumb_path(p, sizeof p, name); snprintf(q, sizeof q, "%s.tmp", p);
-    FILE *f = fopen(q, "wb"); if (!f) _exit(7);
-    int hd[3] = { 0x54565441, tmp.w, tmp.h };
-    int ok = fwrite(hd, sizeof hd, 1, f) == 1 && fwrite(tmp.px, 4, (size_t)(tmp.w * tmp.h), f) == (size_t)(tmp.w * tmp.h);
-    if (fclose(f) != 0 || !ok || rename(q, p) != 0) { unlink(q); _exit(8); }
+    static uint8_t out[4 + TH_MAXW * TH_MAXH * 2];
+    out[0] = (uint8_t)tmp.w; out[1] = (uint8_t)(tmp.w >> 8); out[2] = (uint8_t)tmp.h; out[3] = (uint8_t)(tmp.h >> 8);
+    for (int i = 0; i < tmp.w * tmp.h; i++) {
+        uint32_t c = tmp.px[i]; unsigned v = ((c >> 19) & 31) << 11 | ((c >> 10) & 63) << 5 | ((c >> 3) & 31);
+        out[4 + i * 2] = (uint8_t)v; out[5 + i * 2] = (uint8_t)(v >> 8);
+    }
+    FILE *f = fopen(FRAME_TMP ".tmp", "wb"); if (!f) _exit(7);
+    size_t len = 4 + (size_t)(tmp.w * tmp.h) * 2;
+    int ok = fwrite(out, 1, len, f) == len;
+    if (fclose(f) != 0 || !ok || rename(FRAME_TMP ".tmp", FRAME_TMP) != 0) { unlink(FRAME_TMP ".tmp"); _exit(8); }
     _exit(0);
 }
-static void local_thumb_drop(const char *name) { char p[1000]; local_thumb_path(p, sizeof p, name); unlink(p); }
+static void local_thumb_drop(const char *name) {   /* forget its frame (the bytes go when the pack is trimmed) */
+    char id[320]; snprintf(id, sizeof id, "local:%s", name);
+    unsigned k = tp_key(id);
+    for (int i = 0; i < tpn; i++) if (tp[i].key == k) tp[i].key = 0;
+    for (int i = 0; TC && i < TH_SLOTS; i++) if (TC[i].state && !strcmp(TC[i].id, id)) TC[i].state = 0;
+}
 static void video_delete(const char *name) {
     char p[1100]; snprintf(p, sizeof p, "%s/%s", viddir, name); unlink(p);
     snprintf(p, sizeof p, "%s/%s.srt", viddir, name); unlink(p);
@@ -3610,7 +3688,13 @@ static void th_poll(void) {
     Thumb *th = &TC[th_slot];
     int ok = !(st & 0x7f) && !((st >> 8) & 255);
     if (!th_nbatch) {
-        ok = ok && local_thumb_load(th, th->id + 6) == 0;
+        if (ok) {
+            FILE *f = fopen(FRAME_TMP, "rb"); int n = 0;
+            if (f) { n = (int)fread(th_buf, 1, sizeof th_buf, f); fclose(f); }
+            ok = thumb_from_565(th, th_buf, n) == 0;
+            if (ok) tp_put(tp_key(th->id), 2, th_buf, (unsigned)n);
+        }
+        unlink(FRAME_TMP);
         if (!ok) logf_("thumbs: no frame from %s (%d)", th->id + 6, (st & 0x7f) ? 128 + (st & 0x7f) : (st >> 8) & 255);
         th->state = ok ? 2 : 3;
         return;
@@ -3619,9 +3703,12 @@ static void th_poll(void) {
     for (int b = 0; b < th_nbatch; b++) {
         Thumb *x = &TC[th_batch[b]];
         if (x->state != 1) continue;
-        char tmp[800], fin[800]; thumb_cache(tmp, sizeof tmp, x->id, ".tmp"); thumb_cache(fin, sizeof fin, x->id, ".jpg");
-        int good = thumb_decode(x, tmp) == 0;
-        if (good) rename(tmp, fin); else unlink(tmp);
+        char tmp[100]; snprintf(tmp, sizeof tmp, "/tmp/archivetv-thumbs/%08x", tp_key(x->id));
+        FILE *f = fopen(tmp, "rb"); size_t n = 0;
+        if (f) { n = fread(th_buf, 1, sizeof th_buf - 64, f); fclose(f); }
+        unlink(tmp);
+        int good = thumb_decode_mem(x, th_buf, n) == 0;
+        if (good) tp_put(tp_key(x->id), 1, th_buf, (unsigned)n);
         x->state = good ? 2 : 3;
     }
     logf_("thumbs: %d fetched in %.1f s", th_nbatch, now_s() - th_started);
@@ -3682,23 +3769,26 @@ static void thumb_ask(const char **ids, int n) {
         if (!strncmp(id, "local:", 6)) {
             if (i) continue;   /* frames only for the selected row: they take a moment */
             Thumb *th = thumb_slot(id); if (!th) return;
-            if (local_thumb_load(th, id + 6) == 0) { th->state = 2; continue; }
+            int r = tp_find(tp_key(id)), n = r >= 0 && tp[r].kind == 2 ? tp_get(r, th_buf, sizeof th_buf) : -1;
+            if (n > 0 && thumb_from_565(th, th_buf, n) == 0) { th->state = 2; continue; }
+            unlink(FRAME_TMP);
             pid_t pid = fork();
             if (pid == 0) { int nul = open("/dev/null", 1); if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); } local_thumb_grab(id + 6); }
             if (pid > 0) { th_pid = pid; th_slot = (int)(th - TC); th_started = now_s(); th_nbatch = 0; } else th->state = 3;
             return;
         }
-        char fin[800]; thumb_cache(fin, sizeof fin, id, ".jpg");
-        if (reads < 2 && access(fin, F_OK) == 0) {   /* kept from before */
+        int r = tp_find(tp_key(id));
+        if (reads < 2 && r >= 0 && tp[r].kind == 1) {   /* kept from before */
             Thumb *th = thumb_slot(id); if (!th) return;
             reads++;
-            if (thumb_decode(th, fin) == 0) { th->state = 2; continue; }
-            unlink(fin); th->state = 0;
+            int n = tp_get(r, th_buf, sizeof th_buf - 64);
+            if (n > 0 && thumb_decode_mem(th, th_buf, (size_t)n) == 0) { th->state = 2; continue; }
+            tp[r].key = 0; th->state = 0;
         }
         if (ng < TH_BATCH) { Thumb *th = thumb_slot(id); if (!th) break; get[ng] = id; gs[ng++] = th; }
     }
     if (!ng) return;
-    char dir[700]; snprintf(dir, sizeof dir, "%s/thumbs", appdir); mkdir(dir, 0755);
+    mkdir("/tmp/archivetv-thumbs", 0755);
     /* our own curl first: it can fetch several at once (-Z) */
     char own[700]; snprintf(own, sizeof own, "%s/bin/curl", appdir);
     int par = access(own, X_OK) == 0;
@@ -3707,7 +3797,7 @@ static void thumb_ask(const char **ids, int n) {
                      CURL_ENV, par ? own : CURL_BIN, par ? "-Z --parallel-max 4 " : "", tls);
     th_nbatch = 0;
     for (int i = 0; i < ng && (par || i == 0); i++) {
-        char tmp[800], qt[900]; thumb_cache(tmp, sizeof tmp, get[i], ".tmp"); unlink(tmp); shq(qt, sizeof qt, tmp);
+        char tmp[100], qt[200]; snprintf(tmp, sizeof tmp, "/tmp/archivetv-thumbs/%08x", tp_key(get[i])); unlink(tmp); shq(qt, sizeof qt, tmp);
         k += snprintf(cmd + k, sizeof cmd - (size_t)k, " -o %s '%s'", qt, get[i]);
         th_batch[th_nbatch++] = (int)(gs[i] - TC);
     }
@@ -4011,12 +4101,7 @@ int main(int argc, char **argv) {
     av_register_all();
     ui_app_version = app_version();
     upd_start_check();
-    {   /* the kept pictures: start over once there are a lot (each is only a few KB) */
-        char d[700]; snprintf(d, sizeof d, "%s/thumbs", appdir);
-        DIR *dd = opendir(d); int cnt = 0;
-        if (dd) { struct dirent *de; while ((de = readdir(dd))) cnt++; closedir(dd); }
-        if (cnt > 1500) { rm_rf(d); logf_("thumbs: cleared the kept pictures (%d)", cnt); }
-    }
+    tp_start();
 
     static const char *SAY[] = {
         "Let's watch old TV!", "Old TV was better, right?", "Hey, let's go back in time!",

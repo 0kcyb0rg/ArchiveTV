@@ -50,7 +50,8 @@ THUMBNAILS (Settings, on by default)
   A little picture of the selected show, item or episode shows at the right of
   the list (Internet Archive's own preview, or a still from the video). Your
   downloaded videos get a frame from the video itself, no Wi-Fi needed.
-  Pictures are kept in thumbs/ so they show at once next time.
+  Pictures are kept in thumbs.pack (10 MB at most, oldest go first) so they
+  show at once next time.
 
 UPDATES (Settings > Update ArchiveTV, needs Wi-Fi)
   At start ArchiveTV quietly checks for a new version and says so at the bottom

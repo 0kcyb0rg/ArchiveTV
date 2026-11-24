@@ -21,6 +21,7 @@ int fclose(FILE *);
 size_t fread(void *, size_t, size_t, FILE *);
 size_t fwrite(const void *, size_t, size_t, FILE *);
 int fseek(FILE *, long, int);
+int truncate(const char *, long);
 long ftell(FILE *);
 char *fgets(char *, int, FILE *);
 int fputs(const char *, FILE *);
