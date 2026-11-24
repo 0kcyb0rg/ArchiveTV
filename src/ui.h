@@ -34,6 +34,8 @@ void ui_set_theme(int i);
 void ui_footer_badge(const char *b);
 void ui_hello(const char *say, int shown, const char *hints, double t);   /* shown = letters typed so far */
 void ui_about(double t);
+/* subtitle lines (Latin-1, \n between lines) at the bottom of buf; above_bar: the time bar is showing */
+void ui_subs(uint32_t *buf, const char *text, int above_bar);
 /* a preview picture (RGB, w x h real pixels) in a little frame at the right of the list, away from row sel_vis;
    px = 0: static, while it's on its way */
 void ui_thumb(const uint32_t *px, int w, int h, int sel_vis, double t);

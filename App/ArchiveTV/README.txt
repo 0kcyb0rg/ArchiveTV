@@ -23,7 +23,7 @@ HOME TABS (L1 / R1 or L2 / R2 to switch)
   Lists   - your playlists
   Files   - the download queue, paused downloads, then the videos on your card
   (gear)  - Settings: music, menu sounds, scanlines, theme, vsync,
-            group episodes, turn off after downloads, thumbnails,
+            group episodes, turn off after downloads, thumbnails, subtitles,
             Update, About
 
 BUTTONS
@@ -70,12 +70,22 @@ A VIDEO (press A on a file)
 FILES TAB
   Queue items: Watch now, Pause / Resume download, Delete download.
   Paused downloads keep what they have and pick up where they stopped.
-  Videos: Play, Add to playlist, Delete. START plays right away.
+  Videos: Play, Add to playlist, Playlist of "<show>", Delete. START plays.
+  Playlist of "<show>" puts every downloaded episode of that show into a
+  playlist named after it, in episode order.
+  Y marks videos (+). Then A: add all the marked ones to a playlist, or delete them.
 
 PLAYING
   A / START pause        LEFT/RIGHT -/+10 s     DOWN/UP or L1/R1 -/+1 min
-  L2/R2 -/+5 min         SELECT start over      Y show/hide the time bar
+  L2/R2 -/+5 min         SELECT fit/zoom/stretch Y subtitles on/off/track
   X screen off/on        B / MENU stop          It remembers where you stopped.
+
+SUBTITLES (Settings, on by default)
+  Shown when the video has text subtitles of its own (SRT, ASS/SSA, MP4 text)
+  or Internet Archive has a matching .srt / .vtt file next to it, which is
+  downloaded along with the video. Y switches between them and off.
+  Picture subtitles (DVD / Blu-ray rips) and non-Latin scripts aren't shown.
+  For your own videos: put "<video name>.srt" next to the video.
 
 FILES IN THIS FOLDER
   videos/       downloaded videos       playlists/   one .txt per playlist

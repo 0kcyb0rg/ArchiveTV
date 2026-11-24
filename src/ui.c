@@ -356,6 +356,42 @@ void ui_thumb(const uint32_t *px, int w, int h, int sel_vis, double t) {
         for (int i = 0; i < rw; i++) o[i] = srow[i * cw / rw];
     }
 }
+/* subtitles over the video: white with a dark outline, centred at the bottom (higher while the time bar shows).
+   text is Latin-1, lines split by \n; long lines wrap. */
+static int subw(const char *s, int n) { int w = 0; for (int i = 0; i < n; i++) w += adv((unsigned char)s[i]); return w; }
+void ui_subs(uint32_t *buf, const char *text, int above_bar) {
+    B = buf;
+    char lines[6][160]; int nl = 0, maxw = RW - 48;
+    const char *p = text;
+    while (*p && nl < 6) {
+        const char *e = strchr(p, '\n'); size_t L = e ? (size_t)(e - p) : strlen(p);
+        /* wrap this line at spaces */
+        size_t i = 0;
+        while (i < L && nl < 6) {
+            while (i < L && p[i] == ' ') i++;
+            size_t j = i, cut = 0;
+            while (j < L && subw(p + i, (int)(j - i + 1)) <= maxw) { j++; if (j < L && p[j] == ' ') cut = j; }
+            if (j < L && cut > i) j = cut;
+            if (j == i) j = i + 1;
+            size_t n = j - i; if (n >= sizeof lines[0]) n = sizeof lines[0] - 1;
+            memcpy(lines[nl], p + i, n); lines[nl][n] = 0;
+            if (n) nl++;
+            i = j;
+        }
+        if (!e) break;
+        p = e + 1;
+    }
+    if (nl > 4) { memmove(lines, lines + nl - 4, sizeof lines[0] * 4); nl = 4; }   /* keep the last ones */
+    int lh = 9 * TS + 5;
+    int y = (above_bar ? RH - 78 : RH - 20) - nl * lh;
+    uint32_t sh = C(16, 16, 24), wt = C(250, 250, 250);
+    for (int k = 0; k < nl; k++, y += lh) {
+        int w = subw(lines[k], (int)strlen(lines[k]));
+        int x = (RW - w) / 2;
+        for (int dy = -TS; dy <= TS; dy += TS) for (int dx = -TS; dx <= TS; dx += TS) if (dx || dy) txt_real(x + dx, y + dy, lines[k], sh, RW);
+        txt_real(x, y, lines[k], wt, RW);
+    }
+}
 int ui_marquee_extra = 0;   /* how many characters the selected title scrolls (set while drawing) */
 void ui_list(const URow *rows, int n, int sel, int top, int moff, double t, const char *empty) {
     B = T;

@@ -52,6 +52,8 @@ char *strrchr(const char *, int);
 char *strstr(const char *, const char *);
 char *strcasestr(const char *, const char *);
 size_t strcspn(const char *, const char *);
+size_t strspn(const char *, const char *);
+char *strdup(const char *);
 long strtol(const char *, char **, int);
 long long strtoll(const char *, char **, int);
 double strtod(const char *, char **);
@@ -219,6 +221,10 @@ _Static_assert(offsetof(AVFrame, format) == 80, "AVFrame.format");
 #define FC_INTERRUPT(fc)  FLD(fc, 1160, void *)
 #define ST_CODEC(st)      FLD(st, 8, void *)
 #define ST_TIMEBASE(st)   FLD(st, 40, AVRational)
+#define ST_DISPOSITION(st) FLD(st, 72, int)
+#define ST_METADATA(st)   FLD(st, 88, void *)
+#define CC_TYPE(c)        FLD(c, 8, int)
+#define CC_CODEC_ID(c)    FLD(c, 48, int)
 #define CC_SAMPLE_RATE(c) FLD(c, 412, int)
 #define CC_CHANNELS(c)    FLD(c, 416, int)
 #define CC_CH_LAYOUT(c)   FLD(c, 448, uint64_t)
@@ -226,6 +232,7 @@ _Static_assert(offsetof(AVFrame, format) == 80, "AVFrame.format");
 #define AV_NOPTS_VALUE ((int64_t)UINT64_C(0x8000000000000000))
 #define AVMEDIA_TYPE_VIDEO 0
 #define AVMEDIA_TYPE_AUDIO 1
+#define AVMEDIA_TYPE_SUBTITLE 3
 #define AV_SAMPLE_FMT_S16 1
 #define AV_CH_LAYOUT_STEREO 3
 #define AVSEEK_FLAG_BACKWARD 1
@@ -265,6 +272,8 @@ void av_free(void *);
 void *avio_alloc_context(unsigned char *, int, int, void *, int (*)(void *, uint8_t *, int), int (*)(void *, uint8_t *, int), int64_t (*)(void *, int64_t, int));
 int av_dict_set(void **, const char *, const char *, int);
 void av_dict_free(void **);
+typedef struct { char *key, *value; } AVDictionaryEntry;
+AVDictionaryEntry *av_dict_get(void *, const char *, const AVDictionaryEntry *, int);
 void *swr_alloc_set_opts(void *, int64_t, int, int, int64_t, int, int, int, void *);
 int swr_init(void *);
 void swr_free(void **);
@@ -272,3 +281,5 @@ int swr_convert(void *, uint8_t **, int, const uint8_t **, int);
 /* ASCII ctype (glibc's needs locale tables) */
 static inline int tolower(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 static inline int isalpha(int c) { return (c | 32) >= 'a' && (c | 32) <= 'z'; }
+static inline int isdigit(int c) { return c >= '0' && c <= '9'; }
+static inline double fabs(double x) { return x < 0 ? -x : x; }

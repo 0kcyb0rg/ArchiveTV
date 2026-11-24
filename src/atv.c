@@ -223,6 +223,7 @@ static void queue_tick(void);
 typedef struct { char id[600]; int state, w, h; uint32_t px[TH_MAXW * TH_MAXH]; double used; } Thumb;   /* id = the picture's address */   /* state 1 = fetching, 2 = ready, 3 = none */
 static void th_poll(void);
 static void local_thumb_drop(const char *name);
+static void video_delete(const char *name);   /* a downloaded video and everything kept with it */
 static pid_t th_pid = 0;   /* the picture being fetched */
 static Thumb *thumb_want(const char *url, int *waiting);
 static void thumb_ask(const char **ids, int n);
@@ -790,7 +791,7 @@ static Chan chans[64]; static int nchan = 0;
 typedef struct { char id[128]; char title[160]; char title8[200]; int coll; } Item;
 static Item *items; static int nitems = 0, items_found = 0, items_page = 0;
 
-typedef struct { char name[400]; char fmt[40]; char disp[200]; long long size; int w, h, rank, have; double len; char thumb[400]; } VFile;
+typedef struct { char name[400]; char fmt[40]; char disp[200]; long long size; int w, h, rank, have; double len; char thumb[400]; char sub[400]; } VFile;
 static VFile *files; static int nfiles = 0;
 static char item_title[200], item_title8[300];
 
@@ -1066,13 +1067,17 @@ typedef struct {
     int fmt_logged;
     int seek_pending; double seek_target, seek_at, last_target, last_seek_t;
     int dur_guess; double dur_est, avail_t, stream_t;
+    const char *msg; double msg_until;   /* a short note over the video ("Zoom", "Subtitles off") */
+    int aspect0;
 } Player;
 static Player PL;
 
 /* ---- YUV -> RGB ---- */
 static int ytab[2][256], rvt[2][256], gut[2][256], gvt[2][256], but_[2][256];
 static uint8_t clp[1280];
-static int conv_key_w = -1, conv_key_h, conv_key_cx, conv_key_cy, conv_key_sar;
+static int conv_key_w = -1, conv_key_h, conv_key_cx, conv_key_cy, conv_key_sar, conv_key_asp;
+static int g_aspect = 0;   /* SELECT while watching: 0 = fit, 1 = zoom (fill the screen, trim the edges), 2 = stretch */
+static const char *const ASPECT_NAME[3] = { "Fit", "Zoom", "Stretch" };
 static int vdx, vdy, vdw, vdh, xm[WMAX], xmc[WMAX], ym[HMAX];
 static void yuv_tables(void) {
     for (int i = 0; i < 1280; i++) { int v = i - 512; clp[i] = (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v); }
@@ -1105,16 +1110,27 @@ static void show_frame(AVFrame *f) {
     if (w <= 0 || h <= 0) return;
     AVRational sar = av_guess_sample_aspect_ratio(PL.fc, FC_STREAMS(PL.fc)[PL.vi], f);
     int sark = sar.num > 0 && sar.den > 0 ? sar.num * 1000 / sar.den : 1000;
-    if (w != conv_key_w || h != conv_key_h || cx != conv_key_cx || cy != conv_key_cy || sark != conv_key_sar) {
-        conv_key_w = w; conv_key_h = h; conv_key_cx = cx; conv_key_cy = cy; conv_key_sar = sark;
+    if (w != conv_key_w || h != conv_key_h || cx != conv_key_cx || cy != conv_key_cy || sark != conv_key_sar || g_aspect != conv_key_asp) {
+        conv_key_w = w; conv_key_h = h; conv_key_cx = cx; conv_key_cy = cy; conv_key_sar = sark; conv_key_asp = g_aspect;
         double ar = (double)w / h * (sark / 1000.0);
         if (!(ar > 0.2 && ar < 5)) ar = (double)w / h;
-        vdw = W; vdh = (int)(W / ar + 0.5);
-        if (vdh > H) { vdh = H; vdw = (int)(H * ar + 0.5); }
+        int sx0 = 0, sy0 = 0, sw = w, sh = h;   /* the part of the picture that is shown */
+        if (g_aspect == 2) { vdw = W; vdh = H; }
+        else if (g_aspect == 1) {   /* fill the screen, keep the shape, trim two sides */
+            vdw = W; vdh = H;
+            double sar_ = (double)W / H;
+            if (ar > sar_) { sw = (int)(w * sar_ / ar + 0.5); sx0 = (w - sw) / 2; }
+            else { sh = (int)(h * ar / sar_ + 0.5); sy0 = (h - sh) / 2; }
+        } else {
+            vdw = W; vdh = (int)(W / ar + 0.5);
+            if (vdh > H) { vdh = H; vdw = (int)(H * ar + 0.5); }
+        }
         vdw &= ~1; vdh &= ~1;
         vdx = (W - vdw) / 2; vdy = (H - vdh) / 2;
-        for (int i = 0; i < vdw; i++) { xm[i] = i * w / vdw; xmc[i] = xm[i] >> cx; }
-        for (int j = 0; j < vdh; j++) ym[j] = j * h / vdh;
+        if (sw < 2) sw = 2;
+        if (sh < 2) sh = 2;
+        for (int i = 0; i < vdw; i++) { xm[i] = sx0 + i * sw / vdw; xmc[i] = xm[i] >> cx; }
+        for (int j = 0; j < vdh; j++) ym[j] = sy0 + j * sh / vdh;
         rect(vbuf, 0, 0, W, H, 0);
         logf_("video %dx%d fmt %d sar %d/%d -> %dx%d at %d,%d", w, h, fmt, sar.num, sar.den, vdw, vdh, vdx, vdy);
     }
@@ -1219,13 +1235,213 @@ static void do_seek_dir(double t, int forward) {
 }
 static void do_seek(double t) { do_seek_dir(t, 0); }
 
+
+/* ---- subtitles: a .srt / .vtt next to the video, or the video's own text tracks (SRT, ASS/SSA, MP4 text) ---- */
+static int g_subs = 1;   /* Settings > Subtitles: show them when there are some */
+typedef struct { float s, e; char *t; } Cue;
+typedef struct { Cue *c; int n, cap; } CueList;
+static CueList SUBF, SUBE;          /* from the file next to the video / from the selected track in the video */
+static int sub_trk[8], sub_ntrk;    /* the video's text tracks (stream numbers) */
+static char sub_trk_name[8][40];
+static int sub_choice;              /* 0 = off, 1.. = the file (if there is one), then the tracks */
+static int sub_si = -1;             /* the stream being shown, or -1 */
+static void cues_free(CueList *L) { for (int i = 0; i < L->n; i++) free(L->c[i].t); free(L->c); memset(L, 0, sizeof *L); }
+static void cue_add(CueList *L, double s, double e, const char *t) {
+    if (!t[0] || e <= s || L->n >= 20000) return;
+    int lo = 0, hi = L->n;                                  /* keep them in order of start time */
+    while (lo < hi) { int m = (lo + hi) / 2; if (L->c[m].s <= s) lo = m + 1; else hi = m; }
+    for (int i = lo - 1; i >= 0 && i >= lo - 4; i--) if (fabs(L->c[i].s - s) < 0.02 && !strcmp(L->c[i].t, t)) return;   /* seen it (after a seek back) */
+    if (L->n == L->cap) { int nc = L->cap ? L->cap * 2 : 256; Cue *c = realloc(L->c, sizeof(Cue) * (size_t)nc); if (!c) return; L->c = c; L->cap = nc; }
+    char *d = strdup(t); if (!d) return;
+    memmove(L->c + lo + 1, L->c + lo, sizeof(Cue) * (size_t)(L->n - lo));
+    L->c[lo].s = (float)s; L->c[lo].e = (float)e; L->c[lo].t = d; L->n++;
+}
+/* subtitle text (UTF-8, with markup) -> plain Latin-1 lines for the pixel font. ass = ASS/SSA override codes */
+static void sub_clean(char *out, size_t cap, const char *in, int ass) {
+    char u[1200]; size_t k = 0; int tag = 0, brace = 0;
+    for (const char *p = in; *p && k + 2 < sizeof u; p++) {
+        if (ass) {
+            if (*p == '{') { brace = 1; continue; }
+            if (*p == '}') { brace = 0; continue; }
+            if (brace) continue;
+            if (*p == '\\' && (p[1] == 'N' || p[1] == 'n')) { u[k++] = '\n'; p++; continue; }
+            if (*p == '\\' && p[1] == 'h') { u[k++] = ' '; p++; continue; }
+        } else {
+            if (*p == '<') { tag = 1; continue; }
+            if (tag) { if (*p == '>') tag = 0; continue; }
+            if (*p == '{' && p[1] == '\\') { const char *e = strchr(p, '}'); if (e) { p = e; continue; } }   /* {\an8} */
+            if (*p == '&') {
+                static const char *const ent[][2] = { { "&amp;", "&" }, { "&lt;", "<" }, { "&gt;", ">" }, { "&quot;", "\"" }, { "&nbsp;", " " }, { "&#39;", "'" } };
+                int hit = 0;
+                for (int i = 0; i < 6; i++) { size_t L = strlen(ent[i][0]); if (!strncmp(p, ent[i][0], L)) { u[k++] = ent[i][1][0]; p += L - 1; hit = 1; break; } }
+                if (hit) continue;
+            }
+        }
+        if (*p == '\r') continue;
+        u[k++] = *p;
+    }
+    u[k] = 0;
+    /* each line to Latin-1; drop empty lines */
+    size_t o = 0; out[0] = 0;
+    for (char *line = u; line; ) {
+        char *nl = strchr(line, '\n'); if (nl) *nl = 0;
+        char l[400]; l1(l, sizeof l, line);
+        char *a = l; while (*a == ' ') a++;
+        size_t L = strlen(a); while (L && a[L - 1] == ' ') a[--L] = 0;
+        if (L && o + L + 2 < cap) { if (o) out[o++] = '\n'; memcpy(out + o, a, L); o += L; out[o] = 0; }
+        line = nl ? nl + 1 : 0;
+    }
+}
+static double sub_time(const char *p, const char **end) {   /* 00:01:02,345  01:02.345  1:02:03.4 */
+    double v[3] = { 0, 0, 0 }; int n = 0;
+    while (n < 3) {
+        if (!isdigit((unsigned char)*p)) break;
+        v[n++] = strtod(p, (char **)&p);
+        if (*p == ',') { v[n - 1] += strtod(p + 1, (char **)&p) / 1000.0 * (1000.0 / 1000); }
+        if (*p != ':') break;
+        p++;
+    }
+    if (end) *end = p;
+    return n == 3 ? v[0] * 3600 + v[1] * 60 + v[2] : n == 2 ? v[0] * 60 + v[1] : n == 1 ? v[0] : -1;
+}
+static void sub_load_file(const char *path) {
+    FILE *f = fopen(path, "rb"); if (!f) return;
+    static char buf[1 << 21]; size_t n = fread(buf, 1, sizeof buf - 1, f); fclose(f); buf[n] = 0;
+    char *p = buf; if ((unsigned char)p[0] == 0xEF && (unsigned char)p[1] == 0xBB && (unsigned char)p[2] == 0xBF) p += 3;
+    int vtt = !strncmp(p, "WEBVTT", 6);
+    char text[1200], clean[600];
+    while (*p) {
+        char *nl = strchr(p, '\n'); char *line = p; p = nl ? nl + 1 : p + strlen(p);
+        if (nl) *nl = 0;
+        char *arrow = strstr(line, "-->");
+        if (!arrow) continue;
+        /* the comma in ",345" is a decimal point in SRT: sub_time handles "," after seconds */
+        const char *q = line; while (*q == ' ') q++;
+        double s = sub_time(q, 0), e = sub_time(arrow + 3 + strspn(arrow + 3, " "), 0);
+        size_t k = 0; text[0] = 0;
+        while (*p) {
+            char *nl2 = strchr(p, '\n'); char *t = p; char *nx = nl2 ? nl2 + 1 : p + strlen(p);
+            if (nl2) *nl2 = 0;
+            size_t L = strlen(t); if (L && t[L - 1] == '\r') t[--L] = 0;
+            if (!L) { p = nx; break; }
+            if (strstr(t, "-->")) { if (nl2) *nl2 = '\n'; break; }   /* a cue with no text */
+            if (k + L + 2 < sizeof text) { if (k) text[k++] = '\n'; memcpy(text + k, t, L); k += L; text[k] = 0; }
+            p = nx;
+        }
+        if (s < 0 || e < 0) continue;
+        sub_clean(clean, sizeof clean, text, 0);
+        cue_add(&SUBF, s, e, clean);
+    }
+    logf_("subtitles: %d lines from %s%s", SUBF.n, path, vtt ? " (WebVTT)" : "");
+}
+/* the files that can sit next to a video: <video>.srt, or the name without its extension */
+static void sub_find_file(const char *path) {
+    const char *ext[] = { ".srt", ".vtt" };
+    char p[1100];
+    for (int i = 0; i < 2 && !SUBF.n; i++) {
+        snprintf(p, sizeof p, "%s%s", path, ext[i]);
+        if (access(p, F_OK) == 0) { sub_load_file(p); continue; }
+        snprintf(p, sizeof p, "%s", path);
+        char *dot = strrchr(p, '.'), *sl = strrchr(p, '/');
+        if (dot && (!sl || dot > sl)) { snprintf(dot, sizeof p - (size_t)(dot - p), "%s", ext[i]); if (access(p, F_OK) == 0) sub_load_file(p); }
+    }
+}
+/* a packet from the selected text track */
+static void sub_packet(AVPacket *pk, double tb) {
+    if (!pk->data || pk->size <= 0 || pk->size > 4000) return;
+    char raw[4100]; int n = pk->size; const uint8_t *d = pk->data;
+    if (n >= 2 && d[0] < 0x20 && ((d[0] << 8) | d[1]) <= n - 2) { int L = (d[0] << 8) | d[1]; d += 2; n = L; }   /* MP4 text: a length first */
+    for (int i = 0; i < n; i++) if (d[i] < 0x09 || (d[i] > 0x0d && d[i] < 0x20)) return;   /* a picture subtitle, not text */
+    memcpy(raw, d, (size_t)n); raw[n] = 0;
+    /* ASS in Matroska: ReadOrder,Layer,Style,Name,MarginL,MarginR,MarginV,Effect,Text */
+    const char *txt_ = raw; int ass = 0;
+    if (!strncmp(raw, "Dialogue:", 9)) {   /* older Matroska readers hand over the whole line: 9 fields before the text */
+        const char *c = raw + 9; int commas = 0;
+        while (*c && commas < 9) { if (*c == ',') commas++; c++; }
+        if (commas == 9) { txt_ = c; ass = 1; }
+    } else if (isdigit((unsigned char)raw[0])) {
+        const char *c = raw; int commas = 0;
+        while (*c && commas < 8) { if (*c == ',') commas++; c++; }
+        if (commas == 8) { txt_ = c; ass = 1; }
+    }
+    if (ass && strstr(txt_, "\\p1")) return;   /* a drawing, not words */
+    int64_t ts = pk->pts != AV_NOPTS_VALUE ? pk->pts : pk->dts;
+    if (ts == AV_NOPTS_VALUE) return;
+    double s = ts * tb, dur = pk->duration > 0 ? pk->duration * tb : pk->convergence_duration > 0 ? pk->convergence_duration * tb : 4;
+    char clean[600]; sub_clean(clean, sizeof clean, txt_, ass);
+    cue_add(&SUBE, s, s + dur, clean);
+}
+static const char *sub_now(double pos) {
+    if (!sub_choice) return 0;
+    CueList *L = SUBF.n && sub_choice == 1 ? &SUBF : &SUBE;
+    if (!L->n) return 0;
+    int lo = 0, hi = L->n;
+    while (lo < hi) { int m = (lo + hi) / 2; if (L->c[m].s <= pos) lo = m + 1; else hi = m; }
+    static char out[1200]; out[0] = 0; size_t o = 0; int got = 0;
+    for (int i = lo - 1; i >= 0 && i >= lo - 12 && got < 3; i--)
+        if (L->c[i].e > pos) {   /* overlapping lines: older ones on top */
+            size_t l = strlen(L->c[i].t);
+            if (o + l + 2 >= sizeof out) break;
+            if (o) { memmove(out + l + 1, out, o + 1); memcpy(out, L->c[i].t, l); out[l] = '\n'; o += l + 1; }
+            else { memcpy(out, L->c[i].t, l + 1); o = l; }
+            got++;
+        }
+    return got ? out : 0;
+}
+static int sub_count(void) { return (SUBF.n ? 1 : 0) + sub_ntrk; }
+static void sub_select(int choice) {   /* 0 = off */
+    int nf = SUBF.n ? 1 : 0;
+    sub_choice = choice;
+    int si = choice > nf ? sub_trk[choice - nf - 1] : -1;
+    if (si != sub_si) { cues_free(&SUBE); sub_si = si; }
+}
+static void sub_label(char *d, size_t cap) {
+    int nf = SUBF.n ? 1 : 0;
+    if (!sub_choice) snprintf(d, cap, "Subtitles off");
+    else if (sub_choice == 1 && nf) snprintf(d, cap, "Subtitles on");
+    else snprintf(d, cap, "Subtitles: %s", sub_trk_name[sub_choice - nf - 1]);
+}
+/* at the start of a video: the file next to it, and the video's own text tracks; picks one if Subtitles is on */
+static void sub_setup(void *fc, const char *path) {
+    cues_free(&SUBF); cues_free(&SUBE); sub_ntrk = 0; sub_choice = 0; sub_si = -1;
+    if (g_aspect != PL.aspect0) settings_save(-1);   /* keep the picture size for next time */
+    sub_find_file(path);
+    int best = -1, bestscore = -1;
+    for (unsigned i = 0; i < FC_NB_STREAMS(fc) && sub_ntrk < 8; i++) {
+        void *st = FC_STREAMS(fc)[i], *cc = ST_CODEC(st);
+        int type = CC_TYPE(cc), id = CC_CODEC_ID(cc);
+        AVDictionaryEntry *lang = av_dict_get(ST_METADATA(st), "language", 0, 0), *title = av_dict_get(ST_METADATA(st), "title", 0, 0);
+        logf_("stream %u: type %d codec %x lang %s title %s", i, type, id, lang ? lang->value : "-", title ? title->value : "-");
+        if (type != AVMEDIA_TYPE_SUBTITLE) continue;
+        if (id == 0x17000 || id == 0x17001 || id == 0x17003 || id == 0x17006 || id == 0x17007) continue;   /* pictures (DVD, Blu-ray...) */
+        char nm[80];
+        if (title && title->value[0]) l1(nm, sizeof nm, title->value);
+        else if (lang && lang->value[0] && strcmp(lang->value, "und")) l1(nm, sizeof nm, lang->value);
+        else snprintf(nm, sizeof nm, "track %d", sub_ntrk + 1);
+        snprintf(sub_trk_name[sub_ntrk], sizeof sub_trk_name[0], "%s", nm);
+        /* the one to start with: English, the track marked default, and not just "signs & songs" */
+        int sc = 0; char tl[80]; snprintf(tl, sizeof tl, "%s", title ? title->value : ""); for (char *c = tl; *c; c++) *c = (char)tolower((unsigned char)*c);
+        if (lang && (!strcmp(lang->value, "eng") || !strcmp(lang->value, "en"))) sc += 4;
+        if (ST_DISPOSITION(st) & 1) sc += 2;
+        if (strstr(tl, "sign") || strstr(tl, "song") || ST_DISPOSITION(st) & 0x40) sc -= 3;
+        if (sc > bestscore) { bestscore = sc; best = sub_ntrk; }
+        sub_trk[sub_ntrk++] = (int)i;
+    }
+    if (g_subs && sub_count()) sub_select(SUBF.n ? 1 : best + 1);
+    if (sub_count()) logf_("subtitles: file %s, %d text track(s), showing %d", SUBF.n ? "yes" : "no", sub_ntrk, sub_choice);
+}
 static void refresh(const char *title) {
     double t = now_s();
     int osd = PL.paused || t < PL.osd_until || PL.vi < 0;
     if (PL.black) return;
-    if (!osd) { present(vbuf); return; }
+    int note = PL.msg && t < PL.msg_until;
+    const char *sub = PL.vi >= 0 ? sub_now(PL.pos) : 0;
+    if (!osd && !note && !sub) { present(vbuf); return; }
     if (PL.vi < 0) ui_message("ArchiveTV", "Audio only", 0, MOOD_HAPPY, 0, t);
     else memcpy(back, vbuf, sizeof(uint32_t) * W * H);
+    if (sub) ui_subs(back, sub, osd);
+    if (note) ui_toast(PL.msg);
+    if (!osd) { present(back); return; }
     time_t tt = time(0); struct tm tmv; localtime_r(&tt, &tmv);
     char hh[8]; snprintf(hh, sizeof hh, "%02d:%02d", tmv.tm_hour, tmv.tm_min);
     ui_osd(back, title, PL.seek_pending ? PL.seek_target : PL.pos, PL.dur, PL.paused, hh, t);
@@ -1413,6 +1629,8 @@ static int play_file_inner(const char *path, const char *key, const char *title_
     if (PL.ai >= 0 && audio_open() < 0) { if (PL.acc) avcodec_close(PL.acc); PL.acc = 0; PL.ai = -1; }
     PL.vf = av_frame_alloc(); PL.af = av_frame_alloc();
     SR.in_player = 1;
+    sub_setup(fc, path);
+    PL.aspect0 = g_aspect;
 
     int start = resume_get(key);
     if (streaming && start > 0 && PL.dur > 0) {   /* the spot we left off at isn't downloaded yet: start from the top */
@@ -1446,9 +1664,20 @@ static int play_file_inner(const char *path, const char *key, const char *title_
                 if (A.open) SDL_PauseAudio(PL.paused);
                 PL.osd_until = t + 3;
                 break;
-            case K_Y: PL.osd_until = PL.osd_until > t ? 0 : t + 5; break;
+            case K_Y: {   /* subtitles: off -> each one there is -> off */
+                static char lab[64];
+                PL.osd_until = t + 3;
+                if (!sub_count()) { PL.msg = "No subtitles for this one"; PL.msg_until = t + 1.5; break; }
+                sub_select((sub_choice + 1) % (sub_count() + 1));
+                sub_label(lab, sizeof lab); PL.msg = lab; PL.msg_until = t + 1.5;
+                break;
+            }
             case K_X: PL.black = !PL.black; backlight(!PL.black); if (PL.black) { rect(back, 0, 0, W, H, 0); present(back); } break;
-            case K_SELECT: do_seek(0); PL.osd_until = t + 3; break;
+            case K_SELECT:   /* picture size: fit -> zoom -> stretch */
+                g_aspect = (g_aspect + 1) % 3; conv_key_w = -1;
+                PL.msg = ASPECT_NAME[g_aspect]; PL.msg_until = t + 1.5;
+                if (PL.shown) { show_frame(PL.vf); }
+                break;
             case K_LEFT: step = -10; break;
             case K_RIGHT: step = 10; break;
             case K_L1: case K_DOWN: step = -60; break;
@@ -1497,6 +1726,7 @@ static int play_file_inner(const char *path, const char *key, const char *title_
                 PL.vq[(PL.vqh + PL.vqn) % VQMAX] = pkt; PL.vqn++;
             } else {
                 if (pkt.stream_index == PL.ai) decode_audio(&pkt);
+                else if (pkt.stream_index == sub_si && sub_si >= 0) { AVRational tb = ST_TIMEBASE(FC_STREAMS(PL.fc)[sub_si]); if (tb.den > 0) sub_packet(&pkt, (double)tb.num / tb.den); }
                 av_free_packet(&pkt);
             }
         }
@@ -1565,6 +1795,7 @@ static int play_file_inner(const char *path, const char *key, const char *title_
     if (PL.vcc) avcodec_close(PL.vcc);
     if (PL.acc) avcodec_close(PL.acc);
     logf_("playback finished at %.1f (%s)", PL.pos, ended ? "end" : "stopped");
+    cues_free(&SUBF); cues_free(&SUBE); sub_ntrk = 0; sub_choice = 0; sub_si = -1;
 close_out:
     ui_osd_avail = -1;
     avformat_close_input(&fc);
@@ -1609,7 +1840,7 @@ static void settings_save(int tab) {
     if (tab >= 0) g_tab = tab;
     char p[700]; snprintf(p, sizeof p, "%s/settings.txt", appdir);
     FILE *f = fopen(p, "w"); if (!f) return;
-    fprintf(f, "theme %d\ntab %d\nscreen %d\nmusic %d\nsounds %d\nvsync %d\ngroup %d\nautooff %d\nthumbs %d\n", g_theme, g_tab, g_fx, g_music, g_sounds, g_vsync, g_group, g_autooff, g_thumbs);
+    fprintf(f, "theme %d\ntab %d\nscreen %d\nmusic %d\nsounds %d\nvsync %d\ngroup %d\nautooff %d\nthumbs %d\nsubs %d\naspect %d\n", g_theme, g_tab, g_fx, g_music, g_sounds, g_vsync, g_group, g_autooff, g_thumbs, g_subs, g_aspect);
     fclose(f);
 }
 /* reads one setting before everything else is up (the screen mode is picked before settings_load) */
@@ -1635,6 +1866,8 @@ static void settings_load(void) {
         else if (!strncmp(line, "group ", 6)) g_group = atoi(line + 6) != 0;
         else if (!strncmp(line, "autooff ", 8)) g_autooff = atoi(line + 8) != 0;
         else if (!strncmp(line, "thumbs ", 7)) g_thumbs = atoi(line + 7) != 0;
+        else if (!strncmp(line, "subs ", 5)) g_subs = atoi(line + 5) != 0;
+        else if (!strncmp(line, "aspect ", 7)) { g_aspect = atoi(line + 7); if (g_aspect < 0 || g_aspect > 2) g_aspect = 0; }
     }
     fclose(f);
     if (g_theme < 0 || g_theme >= ui_theme_count()) g_theme = 1;
@@ -2359,6 +2592,68 @@ static void thumb_match(void) {
     }
     th_n = 0;
 }
+/* subtitle files in the item: "Ep 1.srt", "Ep 1.en.srt", "Ep 1.eng.vtt"... matched to "Ep 1.mp4" by name */
+static char (*sf_names)[400]; static int sf_n;
+static void subfile_note(const char *name) {
+    size_t L = strlen(name);
+    if (L < 5 || (strcasecmp(name + L - 4, ".srt") && strcasecmp(name + L - 4, ".vtt")) || sf_n >= 400) return;
+    if (!sf_names) { sf_names = calloc(400, 400); if (!sf_names) return; }
+    snprintf(sf_names[sf_n++], 400, "%s", name);
+}
+static void subfile_match(void) {
+    for (int i = 0; i < nfiles; i++) {
+        files[i].sub[0] = 0;
+        char b[400]; thumb_base(b, sizeof b, files[i].name);
+        size_t bl = strlen(b); int best = -1, bs = -1;
+        for (int j = 0; j < sf_n; j++) {
+            const char *f = strrchr(sf_names[j], '/'); f = f ? f + 1 : sf_names[j];
+            if (strncasecmp(f, b, bl) || (f[bl] != '.' && f[bl] != '_')) continue;   /* <base>.srt, <base>.en.srt, <base>_eng.srt */
+            const char *mid = f + bl; int sc = 1;
+            if (strcasestr(mid, ".en.") || strcasestr(mid, "_en.") || strcasestr(mid, ".eng.") || strcasestr(mid, "_eng.") || strcasestr(mid, "english")) sc = 3;
+            if (strlen(mid) == 4) sc = 2;                   /* plain <base>.srt */
+            if (strcasestr(mid, "asr")) sc = 0;             /* automatic speech recognition: last choice */
+            if (sc > bs) { bs = sc; best = j; }
+        }
+        if (best >= 0) snprintf(files[i].sub, sizeof files[i].sub, "%s", sf_names[best]);
+    }
+    sf_n = 0;
+}
+/* fetches the subtitle file of files[fi] to sit next to its video (<video>.srt), quietly in the background
+   (wait = 0) or while a "Getting subtitles" note shows (wait = 1, B skips it) */
+static void subfile_fetch(const char *id, int fi, int wait) {
+    if (fi < 0 || fi >= nfiles || !files[fi].sub[0] || !has_wifi) return;
+    char sn[300], p[1000], dst[1100], url[2200];
+    local_path(p, sizeof p, sn, sizeof sn, id, files[fi].name);
+    const char *ext = files[fi].sub + strlen(files[fi].sub) - 4;
+    snprintf(dst, sizeof dst, "%s%s", p, !strcasecmp(ext, ".vtt") ? ".vtt" : ".srt");
+    if (access(dst, F_OK) == 0) return;
+    dl_url(url, sizeof url, id, files[fi].sub);
+    static char cmd[4000]; char qd[1200], qt[1200], qu[2400], tls[900];
+    char tmp[1110]; snprintf(tmp, sizeof tmp, "%s.tmp", dst);
+    shq(qt, sizeof qt, tmp); shq(qd, sizeof qd, dst); shq(qu, sizeof qu, url); curl_tls(tls, sizeof tls);
+    snprintf(cmd, sizeof cmd, "%s %s -sSL --fail --connect-timeout 10 --max-time 30 --max-filesize 2000000 -A ArchiveTV-Miyoo %s -o %s %s && mv -f %s %s || rm -f %s",
+             CURL_ENV, CURL_BIN, tls, qt, qu, qt, qd, qt);
+    pid_t pid = fork();
+    if (pid == 0) {
+        int nul = open("/dev/null", 1); if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); }
+        if (!wait && fork() != 0) _exit(0);   /* in the background: let it run on its own, nobody waits for it */
+        execl("/bin/sh", "sh", "-c", cmd, (char *)0); _exit(127);
+    }
+    if (pid < 0) return;
+    int st = 0, done = !wait;
+    if (!wait) { waitpid(pid, &st, 0); return; }
+    double t0 = now_s();
+    while (now_s() - t0 < 30) {
+        if (waitpid(pid, &st, WNOHANG) == pid) { done = 1; break; }
+        message_m("ArchiveTV", "Getting subtitles...", 0, MOOD_WOW, "B:Skip");
+        SDL_Event e; int skip = 0;
+        while (SDL_PollEvent(&e)) if (e.type == SDL_KEYDOWN && (e.key.keysym.sym == K_B || e.key.keysym.sym == K_MENU)) skip = 1;
+        if (skip) break;
+        usleep(50000);
+    }
+    if (!done) { kill(pid, SIGTERM); waitpid(pid, &st, 0); unlink(tmp); }
+    if (access(dst, F_OK) == 0) logf_("subtitles: got %s", files[fi].sub);
+}
 static char cur_item_id[128];
 static const char *thumb_file(int fi) {   /* a still from this video, or else the item's picture */
     static char u[4][900]; static int k = 0;
@@ -2388,7 +2683,7 @@ static int load_item(const char *id) {
         char name[400], fmt[64], tmp[64];
         const char *v = jget(el, "name"); if (!v) continue;
         jstr(v, name, sizeof name);
-        if (!is_video_name(name)) { thumb_note(name); continue; }
+        if (!is_video_name(name)) { thumb_note(name); subfile_note(name); continue; }
         VFile *f = &files[nfiles];
         memset(f, 0, sizeof *f);
         snprintf(f->name, sizeof f->name, "%s", name);
@@ -2415,6 +2710,7 @@ static int load_item(const char *id) {
     }
     free(js);
     thumb_match();
+    subfile_match();
     qsort(files, (size_t)nfiles, sizeof(VFile), cmp_file);
     logf_("item %s: %d video files", id, nfiles);
     return 0;
@@ -2424,7 +2720,7 @@ static void file_act(const char *id, int fi, int k, const char **status) {
     VFile *f = &files[fi];
     char sn[300], p[1000], url[2200];
     local_path(p, sizeof p, sn, sizeof sn, id, f->name);
-    if (k == K_START && f->size <= 2000000000LL) { watch(id, f->name, f->disp); f->have = access(p, F_OK) == 0; return; }
+    if (k == K_START && f->size <= 2000000000LL) { subfile_fetch(id, fi, 1); watch(id, f->name, f->disp); f->have = access(p, F_OK) == 0; return; }
     if (k != K_A && k != K_START) return;
     if (f->size > 2000000000LL) { *status = "Too big (over 2 GB) - pick another file"; return; }
     f->have = access(p, F_OK) == 0;
@@ -2434,8 +2730,9 @@ static void file_act(const char *id, int fi, int k, const char **status) {
     int c = menu_pick(f->disp, f->have ? opts_have : opts_new, 4);
     if (c < 0) return;
     const char *act = f->have ? opts_have[c] : opts_new[c];
-    if (!strcmp(act, "Watch now") || !strcmp(act, "Watch")) { watch(id, f->name, f->disp); f->have = access(p, F_OK) == 0; }
+    if (!strcmp(act, "Watch now") || !strcmp(act, "Watch")) { subfile_fetch(id, fi, 1); watch(id, f->name, f->disp); f->have = access(p, F_OK) == 0; }
     else if (!strcmp(act, "Add to download queue")) {
+        subfile_fetch(id, fi, 0);
         dl_url(url, sizeof url, id, f->name);
         int r = q_add(url, p, f->disp);
         *status = r == 0 ? "Added to the queue (see Files tab)" : r == 1 ? "Already in the queue" : "Queue is full";
@@ -2444,7 +2741,7 @@ static void file_act(const char *id, int fi, int k, const char **status) {
         char pl[64];
         if (pl_choose(pl, sizeof pl)) { *status = pl_append(pl, id, f->name, f->disp) == 0 ? "Added to playlist!" : "Could not save"; }
     } else if (!strcmp(act, "Delete from card")) {
-        unlink(p); resume_set(sn, 0); local_thumb_drop(sn); sync(); f->have = 0; *status = "Deleted.";
+        video_delete(sn); f->have = 0; *status = "Deleted.";
     }
 }
 static int g_file_sort = 0;   /* 0 = best quality first, 1 = A to Z (episode order) */
@@ -2804,6 +3101,54 @@ static void lbl_tab_lists(int i, char *m, size_t mc, char *s, size_t sc, int *to
     l1(m, mc, pls[i - 1]);
 }
 /* Files tab: queue entries first, then what's on the card */
+/* Files tab: downloaded videos marked with Y, to add to a playlist (or delete) together */
+static char (*dmarks)[300]; static int ndmarks;
+static int dmark_find(const char *name) { for (int i = 0; i < ndmarks; i++) if (!strcmp(dmarks[i], name)) return i; return -1; }
+static void dmark_toggle(const char *name) {
+    int i = dmark_find(name);
+    if (i >= 0) { memmove(dmarks[i], dmarks[i + 1], sizeof dmarks[0] * (size_t)(ndmarks - i - 1)); ndmarks--; return; }
+    if (!dmarks) { dmarks = calloc(500, 300); if (!dmarks) return; }
+    if (ndmarks < 500) snprintf(dmarks[ndmarks++], 300, "%s", name);
+}
+static void dmark_prune(void) {   /* marks of videos that are gone */
+    for (int i = 0; i < ndmarks; ) {
+        int ok = 0; for (int j = 0; j < ndf; j++) if (!strcmp(dfiles[j].name, dmarks[i])) { ok = 1; break; }
+        if (ok) i++; else { memmove(dmarks[i], dmarks[i + 1], sizeof dmarks[0] * (size_t)(ndmarks - i - 1)); ndmarks--; }
+    }
+}
+/* a downloaded video as a playlist entry: "<id>__<file>" on the card -> id + file */
+static int dfile_pl_add(const char *pl, int i) {
+    char nm[300]; snprintf(nm, sizeof nm, "%s", dfiles[i].name);
+    const char *u = strstr(nm, "__");
+    char id[160] = "";
+    if (u) { size_t il = (size_t)(u - nm); if (il >= sizeof id) il = sizeof id - 1; memcpy(id, nm, il); id[il] = 0; }
+    return pl_append(pl, id[0] ? id : "local", u ? u + 2 : nm, dfiles[i].disp);
+}
+static const char *dfile_disp(int i) { return dfiles[i].disp; }
+/* "Make a playlist of this show": every downloaded episode of the show the video at i belongs to, in episode
+   order, into a playlist named after the show (new ones are added to the end if it's there already) */
+static int pl_of_show(int i, char *name, size_t cap) {
+    char key[96], show[120], k2[96], s2[120];
+    if (!series_key(dfiles[i].disp, key, sizeof key, show, sizeof show)) return -1;
+    int *mem = calloc((size_t)ndf, sizeof(int)); if (!mem) return -1;
+    int n = 0;
+    for (int j = 0; j < ndf; j++) if (series_key(dfiles[j].disp, k2, sizeof k2, s2, sizeof s2) && !strcmp(k2, key)) mem[n++] = j;
+    g_mname = dfile_disp; qsort(mem, (size_t)n, sizeof(int), cmp_members);
+    for (char *c = show; *c; c++) if (strchr("\\/:*?\"<>|.", *c)) *c = '_';
+    show[40] = 0;
+    snprintf(name, cap, "%s", show);
+    pl_load(name);   /* what's in it already (none if it's new) */
+    char p[800]; pl_path(p, sizeof p, name);
+    { FILE *f = fopen(p, "a"); if (f) fclose(f); }
+    int added = 0;
+    for (int k = 0; k < n; k++) {
+        const char *u = strstr(dfiles[mem[k]].name, "__"), *file = u ? u + 2 : dfiles[mem[k]].name;
+        int have = 0; for (int e = 0; e < nple; e++) if (!strcmp(ple[e].name, file)) { have = 1; break; }
+        if (!have && dfile_pl_add(name, mem[k]) == 0) added++;
+    }
+    free(mem);
+    return added;
+}
 static void lbl_tab_files(int i, char *m, size_t mc, char *s, size_t sc, int *tone) {
     if (i < nq) {
         snprintf(m, mc, "%s", Q[i].disp);
@@ -2828,9 +3173,11 @@ static void lbl_tab_files(int i, char *m, size_t mc, char *s, size_t sc, int *to
     }
     i -= npart;
     if (i < 0 || i >= ndf) { snprintf(m, mc, "..."); *tone = 3; return; }
-    snprintf(m, mc, "%s", dfiles[i].disp);
+    int mk = dmark_find(dfiles[i].name) >= 0;
+    snprintf(m, mc, "%s%s", mk ? "+ " : "", dfiles[i].disp);
     fmt_size(s, sc, dfiles[i].size);
     if (resume_get(dfiles[i].name) > 0) *tone = 1;
+    if (mk) *tone = 2;
 }
 
 static void lbl_plentry(int i, char *m, size_t mc, char *s, size_t sc, int *tone) {
@@ -3245,6 +3592,12 @@ static void local_thumb_grab(const char *name) {   /* runs in the child; its exi
     _exit(0);
 }
 static void local_thumb_drop(const char *name) { char p[1000]; local_thumb_path(p, sizeof p, name); unlink(p); }
+static void video_delete(const char *name) {
+    char p[1100]; snprintf(p, sizeof p, "%s/%s", viddir, name); unlink(p);
+    snprintf(p, sizeof p, "%s/%s.srt", viddir, name); unlink(p);
+    snprintf(p, sizeof p, "%s/%s.vtt", viddir, name); unlink(p);
+    resume_set(name, 0); local_thumb_drop(name); sync();
+}
 static void th_poll(void) {
     if (th_pid <= 0) return;
     int st = 0;
@@ -3376,7 +3729,8 @@ static void lbl_tab_settings(int i, char *m, size_t mc, char *s, size_t sc, int 
     case 5: snprintf(m, mc, "Group episodes of a show"); snprintf(s, sc, "%s", g_group ? "On" : "Off"); break;
     case 6: snprintf(m, mc, "Turn off after downloads"); snprintf(s, sc, "%s", g_autooff ? "On" : "Off"); break;
     case 7: snprintf(m, mc, "Thumbnails"); snprintf(s, sc, "%s", g_thumbs ? "On" : "Off"); break;
-    case 8: upd_poll(); snprintf(m, mc, "Update ArchiveTV...");
+    case 8: snprintf(m, mc, "Subtitles"); snprintf(s, sc, "%s", g_subs ? "On" : "Off"); break;
+    case 9: upd_poll(); snprintf(m, mc, "Update ArchiveTV...");
             if (upd_ready) { snprintf(s, sc, "Restart to finish"); *tone = 1; }
             else if (upd_new[0]) { snprintf(s, sc, "%s is out!", upd_new); *tone = 1; }
             else snprintf(s, sc, "v%s", app_version()); break;
@@ -3409,7 +3763,8 @@ static void settings_action(int i) {
     case 5: g_group = !g_group; break;
     case 6: g_autooff = !g_autooff; g_off_armed = 0; break;
     case 7: g_thumbs = !g_thumbs; break;
-    case 8: app_update(); return;
+    case 8: g_subs = !g_subs; break;
+    case 9: app_update(); return;
     default: screen_about(); return;
     }
     sfx(SFX_TOGGLE);
@@ -3423,7 +3778,7 @@ static int tab_count(int tab) {
     case 2: return nchan;
     case 3: return npl + 1;
     case 4: return nq + npart + ndf;
-    default: return 10;
+    default: return 11;
     }
 }
 static const char *FOOT[6] = {
@@ -3431,7 +3786,7 @@ static const char *FOOT[6] = {
     "A:Open  L/R:Tab",
     "A:Menu  START:Open  L/R:Tab",
     "A:Open  X:Delete  L/R:Tab",
-    "A:Menu  START:Play  L/R:Tab",
+    "A:Menu  Y:Mark  START:Play",
     "A:Change  L/R:Tab",
 };
 static const char *EMPTY[6] = { 0, "No guide.txt found.", "Nothing saved yet.\nPress Y on a show to save it.", 0, "Nothing yet.\nDownloads show up here.", 0 };
@@ -3441,7 +3796,7 @@ static void home(void) {
     int tab = g_tab, sels[6] = { 0, 0, 0, 0, 0, 0 }, armed = -1;
     const char *status = "";
     for (;;) {
-        hist_load(); pl_scan(); scan_downloads();
+        hist_load(); pl_scan(); scan_downloads(); dmark_prune();
         int n = tab_count(tab);
         g_thumb_fn = tab == 2 ? thumb_saved : tab == 4 ? thumb_dfile : 0;
         int k = list_loop_t("ArchiveTV", n, TABFN[tab], FOOT[tab], &sels[tab], EMPTY[tab], &status, tab);
@@ -3461,11 +3816,20 @@ static void home(void) {
             else if (tab == 4) {
                 if (sel < nq) q_remove(sel, 1);
                 else if (sel - nq < npart) part_delete(parts[sel - nq].dst);
-                else if (sel - nq - npart < ndf) { int i = sel - nq - npart; char p[1000]; snprintf(p, sizeof p, "%s/%s", viddir, dfiles[i].name); unlink(p); resume_set(dfiles[i].name, 0); local_thumb_drop(dfiles[i].name); sync(); }
+                else if (sel - nq - npart < ndf) video_delete(dfiles[sel - nq - npart].name);
             }
             continue;
         }
         armed = -1; status = "";
+        if (k == K_Y && tab == 4) {   /* mark a downloaded video */
+            int i = sel - nq - npart;
+            if (i < 0 || i >= ndf) continue;
+            dmark_toggle(dfiles[i].name); sfx(SFX_TOGGLE);
+            static char ms[48]; snprintf(ms, sizeof ms, ndmarks ? "%d marked: press A for what to do" : "Nothing marked", ndmarks);
+            status = ms;
+            if (sel + 1 < n) sels[tab] = sel + 1;   /* on to the next one, to mark a run quickly */
+            continue;
+        }
         if (k == K_Y && tab == 0 && sel >= 2) {
             const char *h = hist[sel - 2];
             char t[160]; snprintf(t, sizeof t, "%s %s", h[0] == 'c' ? "Collections:" : "Search:", h + 2);
@@ -3561,23 +3925,51 @@ static void home(void) {
             char p[1000]; snprintf(p, sizeof p, "%s/%s", viddir, dfiles[i].name);
             char nm[300]; snprintf(nm, sizeof nm, "%s", dfiles[i].name);
             const char *u = strstr(nm, "__");
+            if (ndmarks && !quick) {   /* several marked: act on all of them */
+                char a1[48], a2[40]; snprintf(a1, sizeof a1, "Add %d marked to playlist...", ndmarks); snprintf(a2, sizeof a2, "Delete %d marked", ndmarks);
+                const char *o[] = { a1, a2, "Unmark all", "Back" };
+                int c = menu_pick("Marked videos", o, 4);
+                static char ms[64];
+                if (c == 0) {
+                    char pl[64];
+                    if (pl_choose(pl, sizeof pl)) {
+                        int added = 0;
+                        for (int j = 0; j < ndf; j++) if (dmark_find(dfiles[j].name) >= 0 && dfile_pl_add(pl, j) == 0) added++;   /* in list order */
+                        snprintf(ms, sizeof ms, "Added %d to %.30s!", added, pl); status = ms; ndmarks = 0;
+                    }
+                } else if (c == 1) {
+                    char l2[48]; snprintf(l2, sizeof l2, "Delete %d videos from the card?", ndmarks);
+                    if (ask("Delete?", l2, "They can't be brought back.", MOOD_SAD, "A:Delete  B:Keep") == K_A) {
+                        int del = 0;
+                        for (int j = 0; j < ndf; j++) if (dmark_find(dfiles[j].name) >= 0) { video_delete(dfiles[j].name); del++; }
+                        snprintf(ms, sizeof ms, "Deleted %d.", del); status = ms; ndmarks = 0;
+                    }
+                } else if (c == 2) { ndmarks = 0; status = "Unmarked."; }
+                continue;
+            }
+            char key[96], show[120]; int is_show = series_key(dfiles[i].disp, key, sizeof key, show, sizeof show);
+            char a3[64]; snprintf(a3, sizeof a3, "Playlist of \"%.30s\"", show);
             int c = 0;
             if (!quick) {
-                const char *o[] = { "Play", "Add to playlist...", "Delete", "Back" };
-                c = menu_pick(dfiles[i].disp, o, 4);
+                const char *o[] = { "Play", "Add to playlist...", is_show ? a3 : "Delete", is_show ? "Delete" : "Back", "Back" };
+                c = menu_pick(dfiles[i].disp, o, is_show ? 5 : 4);
+                if (!is_show && c >= 2) c++;   /* same numbers below either way */
+                if (c == 4) c = -1;
             }
             if (c == 0) play_file(p, nm, u ? u + 2 : nm, 0);
             else if (c == 1) {
                 char pl[64];
-                if (pl_choose(pl, sizeof pl)) {
-                    char id[160] = "";
-                    if (u) { size_t il = (size_t)(u - nm); if (il >= sizeof id) il = sizeof id - 1; memcpy(id, nm, il); id[il] = 0; }
-                    status = pl_append(pl, id[0] ? id : "local", u ? u + 2 : nm, dfiles[i].disp) == 0 ? "Added to playlist!" : "Could not save";
-                }
+                if (pl_choose(pl, sizeof pl)) status = dfile_pl_add(pl, i) == 0 ? "Added to playlist!" : "Could not save";
             } else if (c == 2) {
+                char pl[64]; static char ms[80];
+                int added = pl_of_show(i, pl, sizeof pl);
+                if (added < 0) status = "Could not make it";
+                else { snprintf(ms, sizeof ms, added ? "%.30s: %d added, in order" : "%.30s already has them all", pl, added); status = ms; }
+                sfx(SFX_DONE);
+            } else if (c == 3) {
                 char msg[120]; snprintf(msg, sizeof msg, "%.60s", dfiles[i].disp);
                 int k2 = ask("Delete?", "Delete this video from the card?", msg, MOOD_SAD, "A:Delete  B:Keep");
-                if (k2 == K_A) { unlink(p); resume_set(dfiles[i].name, 0); local_thumb_drop(dfiles[i].name); sync(); status = "Deleted."; }
+                if (k2 == K_A) { video_delete(dfiles[i].name); status = "Deleted."; }
             }
         }
     }
