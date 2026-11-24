@@ -221,6 +221,7 @@ static void queue_tick(void);
 #define TH_SLOTS 32
 typedef struct { char id[600]; int state, w, h; uint32_t px[TH_MAXW * TH_MAXH]; double used; } Thumb;   /* id = the picture's address */   /* state 1 = fetching, 2 = ready, 3 = none */
 static void th_poll(void);
+static void local_thumb_drop(const char *name);
 static pid_t th_pid = 0;   /* the picture being fetched */
 static Thumb *thumb_want(const char *url, int *waiting);
 static const char *thumb_of_item(const char *id);
@@ -2320,19 +2321,19 @@ static int cmp_file(const void *a, const void *b) {
     if (x->size != y->size) return x->size < y->size ? -1 : 1;
     return strcasecmp(x->name, y->name);
 }
-/* Internet Archive makes a few stills of each video: "<name>.thumbs/<name>_000057.jpg". Each video file gets
-   one from near its start (the third, past any title card), matched by name without the extension. */
+/* Internet Archive makes a few stills of each video, "<item>.thumbs/<file name without extension>_000057.jpg".
+   Each video file gets one from near its start (the third, past any title card). */
 static char (*th_names)[400]; static int th_n;
 static void thumb_note(const char *name) {
-    const char *d = strstr(name, ".thumbs/");
-    if (!d || !strstr(d, ".jpg") || th_n >= 600) return;
-    if (!th_names) { th_names = calloc(600, 400); if (!th_names) return; }
+    if (!strstr(name, ".thumbs/") || !strstr(name, ".jpg") || th_n >= 1500) return;
+    if (!th_names) { th_names = calloc(1500, 400); if (!th_names) return; }
     snprintf(th_names[th_n++], 400, "%s", name);
 }
-static void thumb_base(char *b, size_t cap, const char *name) {   /* "Ep 1_512kb.mp4" -> "Ep 1" */
-    snprintf(b, cap, "%s", name);
-    char *dot = strrchr(b, '.'); char *sl = strrchr(b, '/');
-    if (dot && (!sl || dot > sl)) *dot = 0;
+static void thumb_base(char *b, size_t cap, const char *name) {   /* "dir/Ep 1_512kb.mp4" -> "Ep 1" */
+    const char *sl = strrchr(name, '/');
+    snprintf(b, cap, "%s", sl ? sl + 1 : name);
+    char *dot = strrchr(b, '.');
+    if (dot) *dot = 0;
     size_t n = strlen(b);
     if (n > 6 && !strcmp(b + n - 6, "_512kb")) b[n - 6] = 0;
     else if (n > 3 && !strcmp(b + n - 3, ".ia")) b[n - 3] = 0;
@@ -2342,9 +2343,13 @@ static void thumb_match(void) {
     if (th_n) qsort(th_names, (size_t)th_n, 400, cmp_str400);
     for (int i = 0; i < nfiles; i++) {
         char b[400], want[420]; thumb_base(b, sizeof b, files[i].name);
-        snprintf(want, sizeof want, "%s.thumbs/", b);
+        snprintf(want, sizeof want, "%s_", b);
         size_t wl = strlen(want); int hit = -1, k = 0;
-        for (int j = 0; j < th_n; j++) if (!strncmp(th_names[j], want, wl)) { hit = j; if (++k == 3) break; }
+        for (int j = 0; j < th_n; j++) {
+            const char *f = strstr(th_names[j], ".thumbs/") + 8;
+            if (strncmp(f, want, wl) || strchr(f + wl, '_') || !(f[wl] >= '0' && f[wl] <= '9')) continue;   /* <base>_<digits>.jpg */
+            hit = j; if (++k == 3) break;
+        }
         files[i].thumb[0] = 0;
         if (hit >= 0) snprintf(files[i].thumb, sizeof files[i].thumb, "%s", th_names[hit]);
     }
@@ -2435,7 +2440,7 @@ static void file_act(const char *id, int fi, int k, const char **status) {
         char pl[64];
         if (pl_choose(pl, sizeof pl)) { *status = pl_append(pl, id, f->name, f->disp) == 0 ? "Added to playlist!" : "Could not save"; }
     } else if (!strcmp(act, "Delete from card")) {
-        unlink(p); resume_set(sn, 0); sync(); f->have = 0; *status = "Deleted.";
+        unlink(p); resume_set(sn, 0); local_thumb_drop(sn); sync(); f->have = 0; *status = "Deleted.";
     }
 }
 static int g_file_sort = 0;   /* 0 = best quality first, 1 = A to Z (episode order) */
@@ -2781,6 +2786,13 @@ static void lbl_tab_saved(int i, char *m, size_t mc, char *s, size_t sc, int *to
     snprintf(s, sc, "%s", c->type == CH_ITEM ? "show" : c->type == CH_COLLECTION ? "coll." : "search");
     if (c->type == CH_SEARCH || c->type == CH_CSEARCH) *tone = 3;
 }
+static const char *thumb_dfile(int i) {   /* Files tab: downloaded videos only */
+    static char u[2][320]; static int k = 0;
+    i -= nq + npart;
+    if (i < 0 || i >= ndf) return 0;
+    k ^= 1; snprintf(u[k], sizeof u[k], "local:%s", dfiles[i].name);
+    return u[k];
+}
 static const char *thumb_saved(int i) { return i < nchan && (chans[i].type == CH_ITEM || chans[i].type == CH_COLLECTION) ? thumb_of_item(chans[i].arg) : 0; }
 static void lbl_tab_lists(int i, char *m, size_t mc, char *s, size_t sc, int *tone) {
     (void)s; (void)sc;
@@ -3121,7 +3133,7 @@ static void app_update(void) {
    archive.org/services/img/<id> is a small JPEG for most items (collections often have a PNG or GIF logo; those
    are skipped). One is fetched at a time, only after the cursor has rested on a row, and kept for this run. */
 static Thumb *TC;
-static int th_slot = -1;
+static int th_slot = -1; static double th_started;
 static void *th_cc; static AVFrame *th_fr;
 static int thumb_ok_id(const char *id) {
     if (!id || !id[0] || strlen(id) >= 120) return 0;
@@ -3129,7 +3141,8 @@ static int thumb_ok_id(const char *id) {
     return 1;
 }
 static void thumb_path(char *d, size_t cap) { snprintf(d, cap, "/tmp/archivetv-thumb.jpg"); }
-/* the fetched file -> TC[slot].px, scaled down to fit TH_MAXW x TH_MAXH */
+static int thumb_from_frame(Thumb *th, AVFrame *fr);
+/* the fetched file -> TC[slot].px */
 static int thumb_decode(Thumb *th, const char *path) {
     FILE *f = fopen(path, "rb"); if (!f) return -1;
     static uint8_t buf[256 * 1024 + 64];
@@ -3146,14 +3159,17 @@ static int thumb_decode(Thumb *th, const char *path) {
     AVPacket pk; av_init_packet(&pk); pk.data = buf; pk.size = (int)n;
     int got = 0;
     if (avcodec_decode_video2(th_cc, th_fr, &got, &pk) < 0 || !got) return -1;
-    AVFrame *fr = th_fr;
+    return thumb_from_frame(th, th_fr);
+}
+/* a decoded picture -> th->px, scaled down to fit TH_MAXW x TH_MAXH (shape kept, square pixels assumed) */
+static int thumb_from_frame(Thumb *th, AVFrame *fr) {
     int cx, cy, gray = 0, full = 1;
     switch (fr->format) {
     case 0: cx = 1; cy = 1; full = 0; break;  case 12: cx = 1; cy = 1; break;
     case 4: cx = 1; cy = 0; full = 0; break;  case 13: cx = 1; cy = 0; break;
     case 5: cx = 0; cy = 0; full = 0; break;  case 14: cx = 0; cy = 0; break;
     case 8: cx = cy = 0; gray = 1; break;
-    default: logf_("thumbs: %s has pixel format %d", th->id, fr->format); return -1;
+    default: return -1;
     }
     int sw = fr->width, sh = fr->height;
     if (sw <= 0 || sh <= 0) return -1;
@@ -3177,16 +3193,70 @@ static int thumb_decode(Thumb *th, const char *path) {
     th->w = dw; th->h = dh;
     return 0;
 }
+/* downloaded videos: a frame from 10% in (at most 2 minutes), grabbed by a child process so the menus keep
+   moving, and kept as videos/.thumbs/<file>.rgb for next time */
+static void local_thumb_path(char *d, size_t cap, const char *name) { snprintf(d, cap, "%s/.thumbs/%s.rgb", viddir, name); }
+static int local_thumb_load(Thumb *th, const char *name) {
+    char p[1000]; local_thumb_path(p, sizeof p, name);
+    FILE *f = fopen(p, "rb"); if (!f) return -1;
+    int hd[3] = { 0 }, ok = fread(hd, sizeof hd, 1, f) == 1 && hd[0] == 0x54565441 && hd[1] > 0 && hd[2] > 0 && hd[1] <= TH_MAXW && hd[2] <= TH_MAXH
+                 && fread(th->px, 4, (size_t)(hd[1] * hd[2]), f) == (size_t)(hd[1] * hd[2]);
+    fclose(f);
+    if (!ok) { unlink(p); return -1; }
+    th->w = hd[1]; th->h = hd[2];
+    return 0;
+}
+static void local_thumb_grab(const char *name) {   /* runs in the child; its exit code says how it went */
+    static Thumb tmp;
+    char v[1000]; snprintf(v, sizeof v, "%s/%s", viddir, name);
+    void *fc = 0;
+    if (avformat_open_input(&fc, v, 0, 0) < 0) _exit(2);
+    if (avformat_find_stream_info(fc, 0) < 0) _exit(3);
+    void *dec = 0;
+    int vi = av_find_best_stream(fc, AVMEDIA_TYPE_VIDEO, -1, -1, &dec, 0);
+    if (vi < 0 || !dec) _exit(4);
+    void *cc = ST_CODEC(FC_STREAMS(fc)[vi]);
+    av_opt_set_int(cc, "threads", 1, 0);
+    if (avcodec_open2(cc, dec, 0) < 0) _exit(5);
+    int64_t d = FC_DURATION(fc), at = d > 0 ? d / 10 : 0;
+    if (at > 120LL * 1000000) at = 120LL * 1000000;
+    if (at > 0) av_seek_frame(fc, -1, at, AVSEEK_FLAG_BACKWARD);
+    AVFrame *fr = av_frame_alloc(); AVPacket pk; int got = 0;
+    for (int i = 0; i < 600 && !got; i++) {
+        if (av_read_frame(fc, &pk) < 0) break;
+        if (pk.stream_index == vi) avcodec_decode_video2(cc, fr, &got, &pk);
+        av_free_packet(&pk);
+    }
+    if (!got || thumb_from_frame(&tmp, fr) != 0) _exit(6);
+    char p[1000], q[1010]; snprintf(p, sizeof p, "%s/.thumbs", viddir); mkdir(p, 0755);
+    local_thumb_path(p, sizeof p, name); snprintf(q, sizeof q, "%s.tmp", p);
+    FILE *f = fopen(q, "wb"); if (!f) _exit(7);
+    int hd[3] = { 0x54565441, tmp.w, tmp.h };
+    int ok = fwrite(hd, sizeof hd, 1, f) == 1 && fwrite(tmp.px, 4, (size_t)(tmp.w * tmp.h), f) == (size_t)(tmp.w * tmp.h);
+    if (fclose(f) != 0 || !ok || rename(q, p) != 0) { unlink(q); _exit(8); }
+    _exit(0);
+}
+static void local_thumb_drop(const char *name) { char p[1000]; local_thumb_path(p, sizeof p, name); unlink(p); }
 static void th_poll(void) {
     if (th_pid <= 0) return;
     int st = 0;
-    if (waitpid(th_pid, &st, WNOHANG) != th_pid) return;
+    if (waitpid(th_pid, &st, WNOHANG) != th_pid) {
+        if (now_s() - th_started < 25) return;
+        kill(th_pid, SIGKILL); waitpid(th_pid, &st, 0);   /* stuck: give up on this one */
+        logf_("thumbs: gave up on %s", TC[th_slot].id);
+    }
     th_pid = 0;
     Thumb *th = &TC[th_slot];
-    char p[64]; thumb_path(p, sizeof p);
-    int ok = !(st & 0x7f) && !((st >> 8) & 255) && thumb_decode(th, p) == 0;
+    int ok = !(st & 0x7f) && !((st >> 8) & 255);
+    if (!strncmp(th->id, "local:", 6)) {
+        ok = ok && local_thumb_load(th, th->id + 6) == 0;
+        if (!ok) logf_("thumbs: no frame from %s (%d)", th->id + 6, (st & 0x7f) ? 128 + (st & 0x7f) : (st >> 8) & 255);
+    } else {
+        char p[64]; thumb_path(p, sizeof p);
+        ok = ok && thumb_decode(th, p) == 0;
+        unlink(p);
+    }
     th->state = ok ? 2 : 3;
-    unlink(p);
 }
 /* the picture for id, once it's here; asks for it if it isn't */
 /* the Internet Archive picture of an item or collection */
@@ -3200,24 +3270,33 @@ static const char *thumb_of_item(const char *id) {
    2 = here, 3 = there's none), else 0 with *waiting = 1 while another fetch runs. Starts a fetch if none is running. */
 static Thumb *thumb_want(const char *id, int *waiting) {
     *waiting = 0;
-    if (!g_thumbs || !has_wifi || !id || strncmp(id, "https://archive.org/", 20) || strlen(id) >= sizeof TC[0].id || strchr(id, '\'')) return 0;
+    int local = id && !strncmp(id, "local:", 6);
+    if (!g_thumbs || !id || strlen(id) >= sizeof TC[0].id) return 0;
+    if (!local && (!has_wifi || strncmp(id, "https://archive.org/", 20) || strchr(id, '\''))) return 0;
     if (!TC) { TC = (Thumb *)calloc(TH_SLOTS, sizeof(Thumb)); if (!TC) return 0; }
     double t = now_s();
     for (int i = 0; i < TH_SLOTS; i++)
         if (TC[i].state && !strcmp(TC[i].id, id)) { TC[i].used = t; return &TC[i]; }
-    if (access(CURL_BIN, F_OK) != 0) return 0;
+    if (!local && access(CURL_BIN, F_OK) != 0) return 0;
     if (th_pid > 0) { *waiting = 1; return 0; }   /* one at a time */
     int s = 0;
     for (int i = 0; i < TH_SLOTS; i++) { if (!TC[i].state) { s = i; break; } if (TC[i].used < TC[s].used) s = i; }
     Thumb *th = &TC[s];
     snprintf(th->id, sizeof th->id, "%s", id); th->state = 1; th->used = t; th->w = th->h = 0;
+    if (local) {
+        if (local_thumb_load(th, id + 6) == 0) { th->state = 2; return th; }
+        pid_t pid = fork();
+        if (pid == 0) { int nul = open("/dev/null", 1); if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); } local_thumb_grab(id + 6); }
+        if (pid > 0) { th_pid = pid; th_slot = s; th_started = t; } else th->state = 3;
+        return th;
+    }
     static char cmd[2600]; char out[64], qo[100], tls[900];
     thumb_path(out, sizeof out); unlink(out); shq(qo, sizeof qo, out); curl_tls(tls, sizeof tls);
     snprintf(cmd, sizeof cmd, "%s exec %s -sSL --fail --connect-timeout 10 --max-time 20 --max-filesize 262144 -A ArchiveTV-Miyoo %s -o %s '%s'",
              CURL_ENV, CURL_BIN, tls, qo, id);
     pid_t pid = fork();
     if (pid == 0) { int nul = open("/dev/null", 1); if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); } execl("/bin/sh", "sh", "-c", cmd, (char *)0); _exit(127); }
-    if (pid > 0) { th_pid = pid; th_slot = s; } else th->state = 3;
+    if (pid > 0) { th_pid = pid; th_slot = s; th_started = t; } else th->state = 3;
     return th;
 }
 
@@ -3299,7 +3378,7 @@ static void home(void) {
     for (;;) {
         hist_load(); pl_scan(); scan_downloads();
         int n = tab_count(tab);
-        g_thumb_fn = tab == 2 ? thumb_saved : 0;
+        g_thumb_fn = tab == 2 ? thumb_saved : tab == 4 ? thumb_dfile : 0;
         int k = list_loop_t("ArchiveTV", n, TABFN[tab], FOOT[tab], &sels[tab], EMPTY[tab], &status, tab);
         int sel = sels[tab];
         if (k == K_L1 || k == K_R1) { tab = (tab + (k == K_R1 ? 1 : 5)) % 6; armed = -1; status = ""; settings_save(tab); continue; }
@@ -3317,7 +3396,7 @@ static void home(void) {
             else if (tab == 4) {
                 if (sel < nq) q_remove(sel, 1);
                 else if (sel - nq < npart) part_delete(parts[sel - nq].dst);
-                else if (sel - nq - npart < ndf) { int i = sel - nq - npart; char p[1000]; snprintf(p, sizeof p, "%s/%s", viddir, dfiles[i].name); unlink(p); resume_set(dfiles[i].name, 0); sync(); }
+                else if (sel - nq - npart < ndf) { int i = sel - nq - npart; char p[1000]; snprintf(p, sizeof p, "%s/%s", viddir, dfiles[i].name); unlink(p); resume_set(dfiles[i].name, 0); local_thumb_drop(dfiles[i].name); sync(); }
             }
             continue;
         }
@@ -3433,7 +3512,7 @@ static void home(void) {
             } else if (c == 2) {
                 char msg[120]; snprintf(msg, sizeof msg, "%.60s", dfiles[i].disp);
                 int k2 = ask("Delete?", "Delete this video from the card?", msg, MOOD_SAD, "A:Delete  B:Keep");
-                if (k2 == K_A) { unlink(p); resume_set(dfiles[i].name, 0); sync(); status = "Deleted."; }
+                if (k2 == K_A) { unlink(p); resume_set(dfiles[i].name, 0); local_thumb_drop(dfiles[i].name); sync(); status = "Deleted."; }
             }
         }
     }

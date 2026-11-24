@@ -93,6 +93,7 @@ typedef void (*sighandler_t)(int);
 sighandler_t signal(int, sighandler_t);
 #define SIGPIPE 13
 #define SIGTERM 15
+#define SIGKILL 9
 #define SIG_IGN ((sighandler_t)1)
 struct timeval { long tv_sec; long tv_usec; };
 struct timespec { long tv_sec; long tv_nsec; };
