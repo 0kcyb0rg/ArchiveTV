@@ -32,6 +32,8 @@ Download `ArchiveTV-vX.Y.zip` from [Releases](../../releases), copy its `App` fo
 root of your SD card (merge folders), and open **ArchiveTV** from Apps.
 It's also listed in [Mixtape](https://github.com/snyderman3000/mixtape).
 
+Lists show a small preview picture of the selected item (Settings › Thumbnails).
+
 From 1.4 on it can update itself: **Settings › Update ArchiveTV** (needs Wi-Fi). Only the changed
 files are downloaded, each one is checked, and your videos, playlists and settings are never touched.
 

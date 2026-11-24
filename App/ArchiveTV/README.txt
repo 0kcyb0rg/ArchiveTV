@@ -23,7 +23,8 @@ HOME TABS (L1 / R1 or L2 / R2 to switch)
   Lists   - your playlists
   Files   - the download queue, paused downloads, then the videos on your card
   (gear)  - Settings: music, menu sounds, scanlines, theme, vsync,
-            group episodes, turn off after downloads, Update, About
+            group episodes, turn off after downloads, thumbnails,
+            Update, About
 
 BUTTONS
   D-pad move      LEFT/RIGHT page      A open / menu      B back
@@ -44,6 +45,12 @@ SHOWS AND SERIES
 TURN OFF AFTER DOWNLOADS (Settings, off by default)
   Queue up a bunch of videos and when the last one is done, ArchiveTV counts
   down 30 seconds and powers the handheld off. B keeps it on.
+
+THUMBNAILS (Settings, on by default)
+  A little picture of the selected show, item or episode shows at the right of
+  the list (Internet Archive's own preview, or a still from the video). Your
+  downloaded videos get a frame from the video itself, no Wi-Fi needed.
+  Pictures are kept in thumbs/ so they show at once next time.
 
 UPDATES (Settings > Update ArchiveTV, needs Wi-Fi)
   At start ArchiveTV quietly checks for a new version and says so at the bottom
