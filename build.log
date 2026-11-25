@@ -1,0 +1,160 @@
+In file included from ffout/include/libavutil/common.h:427,
+                 from ffout/include/libavutil/avutil.h:289,
+                 from ffout/include/libavutil/samplefmt.h:24,
+                 from ffout/include/libavcodec/avcodec.h:31,
+                 from ffout/include/libavformat/avformat.h:267,
+                 from src/sys_real.h:29,
+                 from src/sys.h:6,
+                 from src/atv.c:6:
+ffout/include/libavutil/mem.h:185:1: warning: 'alloc_size' attribute ignored on a function returning 'int' [-Wattributes]
+  185 | av_alloc_size(2, 3) int av_reallocp_array(void *ptr, size_t nmemb, size_t size);
+      | ^~~~~~~~~~~~~
+src/atv.c: In function 'lbl_tab_settings':
+src/atv.c:3940:13: warning: this 'else' clause does not guard... [-Wmisleading-indentation]
+ 3940 |             else snprintf(s, sc, "v%s", app_version()); break;
+      |             ^~~~
+src/atv.c:3940:57: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the 'else'
+ 3940 |             else snprintf(s, sc, "v%s", app_version()); break;
+      |                                                         ^~~~~
+src/atv.c: In function 'thumb_file':
+src/atv.c:2723:83: warning: '%s' directive output may be truncated writing up to 799 bytes into a region of size between 571 and 870 [-Wformat-truncation=]
+ 2723 |     k = (k + 1) & 3; snprintf(u[k], sizeof u[k], "https://archive.org/download/%s/%s", ide, ne);
+      |                                                                                   ^~        ~~
+src/atv.c:2723:22: note: 'snprintf' output between 31 and 1129 bytes into a destination of size 900
+ 2723 |     k = (k + 1) & 3; snprintf(u[k], sizeof u[k], "https://archive.org/download/%s/%s", ide, ne);
+      |                      ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/atv.c: In function 'guide_load':
+src/atv.c:3078:96: warning: '%s' directive output may be truncated writing up to 1919 bytes into a region of size 40 [-Wformat-truncation=]
+ 3078 |         if (!seen) { gtop[ngtop].cat = c; snprintf(gtop[ngtop].folder, sizeof gtop[0].folder, "%s", gpar[c]); ngtop++; }
+      |                                                                                                ^~
+src/atv.c:3078:43: note: 'snprintf' output between 1 and 1920 bytes into a destination of size 40
+ 3078 |         if (!seen) { gtop[ngtop].cat = c; snprintf(gtop[ngtop].folder, sizeof gtop[0].folder, "%s", gpar[c]); ngtop++; }
+      |                                           ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/atv.c: In function 'pl_load':
+src/atv.c:2331:54: warning: '%s' directive output may be truncated writing up to 899 bytes into a region of size 128 [-Wformat-truncation=]
+ 2329 |         char *a = line, *b = strchr(a, '\t'); if (!b) continue; *b++ = 0;
+      |                   ~~~~                                
+ 2330 |         char *c = strchr(b, '\t'); if (c) *c++ = 0;
+ 2331 |         snprintf(ple[nple].id, sizeof ple[nple].id, "%s", a);
+      |                                                      ^~
+src/atv.c:2331:9: note: 'snprintf' output between 1 and 900 bytes into a destination of size 128
+ 2331 |         snprintf(ple[nple].id, sizeof ple[nple].id, "%s", a);
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/atv.c:2328:81: warning: '%s' directive output may be truncated writing up to 893 bytes into a region of size 100 [-Wformat-truncation=]
+ 2328 |         if (!strncmp(line, "#show ", 6)) { snprintf(ple_show, sizeof ple_show, "%s", line + 6); continue; }
+      |                                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+src/atv.c:2328:44: note: 'snprintf' output between 1 and 894 bytes into a destination of size 100
+ 2328 |         if (!strncmp(line, "#show ", 6)) { snprintf(ple_show, sizeof ple_show, "%s", line + 6); continue; }
+      |                                            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/atv.c: In function 'dl_thread_curl':
+src/atv.c:974:154: warning: '%s' directive output may be truncated writing up to 2599 bytes into a region of size between 2296 and 4194 [-Wformat-truncation=]
+  974 |         snprintf(cmd, sizeof cmd, "%s exec %s -L -sS --fail -C - --retry 5 --retry-delay 3 --connect-timeout 20 --speed-limit 1 --speed-time 60 %s -o %s %s",
+      |                                                                                                                                                          ^~
+  975 |                  CURL_ENV, CURL_BIN, tls, qp, qu);
+      |                                               ~~                                                                                                          
+src/atv.c:974:9: note: 'snprintf' output 207 or more bytes (assuming 4704) into a destination of size 4400
+  974 |         snprintf(cmd, sizeof cmd, "%s exec %s -L -sS --fail -C - --retry 5 --retry-delay 3 --connect-timeout 20 --speed-limit 1 --speed-time 60 %s -o %s %s",
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  975 |                  CURL_ENV, CURL_BIN, tls, qp, qu);
+      |                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/atv.c: In function 'upd_poll':
+src/atv.c:3468:72: warning: '%s' directive output may be truncated writing up to 191 bytes into a region of size 16 [-Wformat-truncation=]
+ 3468 |         else if (!strncmp(line, "version ", 8)) snprintf(v, sizeof v, "%s", line + 8);
+      |                                                 ~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+src/atv.c:3468:49: note: 'snprintf' output between 1 and 192 bytes into a destination of size 16
+ 3468 |         else if (!strncmp(line, "version ", 8)) snprintf(v, sizeof v, "%s", line + 8);
+      |                                                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/atv.c: In function 'pl_auto_add':
+src/atv.c:2319:83: warning: '%s' directive output may be truncated writing up to 19199 bytes into a region of size between 200 and 799 [-Wformat-truncation=]
+ 2319 | static void pl_path(char *p, size_t cap, const char *name) { snprintf(p, cap, "%s/%s.txt", pldir, name); }
+      |                                                                                   ^~
+src/atv.c:2319:62: note: 'snprintf' output between 6 and 19804 bytes into a destination of size 800
+ 2319 | static void pl_path(char *p, size_t cap, const char *name) { snprintf(p, cap, "%s/%s.txt", pldir, name); }
+      |                                                              ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/atv.c: In function 'load_item':
+src/atv.c:2737:178: warning: '%s' directive output may be truncated writing up to 399 bytes into a region of size 300 [-Wformat-truncation=]
+ 2737 |     if (md) { char t[400]; const char *tv = jget(md, "title"); if (tv) { jstr(tv, t, sizeof t); l1(item_title, sizeof item_title, t); snprintf(item_title8, sizeof item_title8, "%s", t); } }
+      |                                                                                                                                                                                  ^~   ~
+src/atv.c:2737:135: note: 'snprintf' output between 1 and 400 bytes into a destination of size 300
+ 2737 |     if (md) { char t[400]; const char *tv = jget(md, "title"); if (tv) { jstr(tv, t, sizeof t); l1(item_title, sizeof item_title, t); snprintf(item_title8, sizeof item_title8, "%s", t); } }
+      |                                                                                                                                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/atv.c: In function 'subfile_fetch':
+src/atv.c:2694:136: warning: '%s' directive output may be truncated writing up to 2399 bytes into a region of size between 1710 and 3808 [-Wformat-truncation=]
+ 2694 |     snprintf(cmd, sizeof cmd, "%s %s -sSL --fail --connect-timeout 10 --max-time 30 --max-filesize 2000000 -A ArchiveTV-Miyoo %s -o %s %s && mv -f %s %s || rm -f %s",
+      |                                                                                                                                        ^~
+ 2695 |              CURL_ENV, CURL_BIN, tls, qt, qu, qt, qd, qt);
+      |                                           ~~                                                                                            
+src/atv.c:2694:5: note: 'snprintf' output 214 or more bytes (assuming 8308) into a destination of size 4000
+ 2694 |     snprintf(cmd, sizeof cmd, "%s %s -sSL --fail --connect-timeout 10 --max-time 30 --max-filesize 2000000 -A ArchiveTV-Miyoo %s -o %s %s && mv -f %s %s || rm -f %s",
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2695 |              CURL_ENV, CURL_BIN, tls, qt, qu, qt, qd, qt);
+      |              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/atv.c: In function 'play_file_inner':
+src/atv.c:1448:67: warning: '%s' directive output may be truncated writing up to 79 bytes into a region of size 40 [-Wformat-truncation=]
+ 1448 |         snprintf(sub_trk_name[sub_ntrk], sizeof sub_trk_name[0], "%s", nm);
+      |                                                                   ^~   ~~
+src/atv.c:1448:9: note: 'snprintf' output between 1 and 80 bytes into a destination of size 40
+ 1448 |         snprintf(sub_trk_name[sub_ntrk], sizeof sub_trk_name[0], "%s", nm);
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/atv.c:1448:67: warning: '%s' directive output may be truncated writing up to 79 bytes into a region of size 40 [-Wformat-truncation=]
+ 1448 |         snprintf(sub_trk_name[sub_ntrk], sizeof sub_trk_name[0], "%s", nm);
+      |                                                                   ^~   ~~
+src/atv.c:1448:9: note: 'snprintf' output between 1 and 80 bytes into a destination of size 40
+ 1448 |         snprintf(sub_trk_name[sub_ntrk], sizeof sub_trk_name[0], "%s", nm);
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/atv.c: In function 'open_item_idx':
+src/atv.c:2949:48: warning: '%s' directive output may be truncated writing up to 159 bytes into a region of size 100 [-Wformat-truncation=]
+ 2949 |         snprintf(sub.title, sizeof sub.title, "%s", it.title);
+      |                                                ^~   ~~~~~~~~
+src/atv.c:2949:9: note: 'snprintf' output between 1 and 160 bytes into a destination of size 100
+ 2949 |         snprintf(sub.title, sizeof sub.title, "%s", it.title);
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/atv.c: In function 'home':
+src/atv.c:2100:116: warning: '%s' directive output may be truncated writing up to 2299 bytes into a region of size 2200 [-Wformat-truncation=]
+ 2100 |             if (fgets(line, sizeof line, f)) { line[strcspn(line, "\r\n")] = 0; snprintf(pf->url, sizeof pf->url, "%s", line); }
+      |                                                                                                                    ^~   ~~~~
+src/atv.c:2100:81: note: 'snprintf' output between 1 and 2300 bytes into a destination of size 2200
+ 2100 |             if (fgets(line, sizeof line, f)) { line[strcspn(line, "\r\n")] = 0; snprintf(pf->url, sizeof pf->url, "%s", line); }
+      |                                                                                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/atv.c:2101:131: warning: '%s' directive output may be truncated writing up to 2299 bytes into a region of size 200 [-Wformat-truncation=]
+ 2101 |             if (fgets(line, sizeof line, f)) { line[strcspn(line, "\r\n")] = 0; if (line[0]) snprintf(pf->disp, sizeof pf->disp, "%s", line); }
+      |                                                                                                                                   ^~   ~~~~
+src/atv.c:2101:94: note: 'snprintf' output between 1 and 2300 bytes into a destination of size 200
+ 2101 |             if (fgets(line, sizeof line, f)) { line[strcspn(line, "\r\n")] = 0; if (line[0]) snprintf(pf->disp, sizeof pf->disp, "%s", line); }
+      |                                                                                              ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/atv.c:3227:26: warning: '%s' directive output may be truncated writing up to 119 bytes into a region of size 64 [-Wformat-truncation=]
+ 3227 |     snprintf(name, cap, "%s", show);
+      |                          ^~   ~~~~
+src/atv.c:3227:5: note: 'snprintf' output between 1 and 120 bytes into a destination of size 64
+ 3227 |     snprintf(name, cap, "%s", show);
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/atv.c:2238:40: warning: '%s' directive output may be truncated writing up to 123 bytes into a region of size 120 [-Wformat-truncation=]
+ 2238 |     snprintf(hist[0], sizeof hist[0], "%s", q);
+      |                                        ^~
+......
+ 4087 |             char hq[124]; snprintf(hq, sizeof hq, "%c %s", typ, q); hist_add(hq);
+      |                                                                              ~~
+src/atv.c:2238:5: note: 'snprintf' output between 1 and 124 bytes into a destination of size 120
+ 2238 |     snprintf(hist[0], sizeof hist[0], "%s", q);
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/atv.c: In function 'main':
+src/atv.c:1929:48: warning: '%s' directive output may be truncated writing up to 3599 bytes into a region of size 2200 [-Wformat-truncation=]
+ 1926 |         char *a = line, *b = strchr(a, '\t'); if (!b) continue; *b++ = 0;
+      |                   ~~~~                          
+......
+ 1929 |         snprintf(Q[nq].url, sizeof Q[nq].url, "%s", a);
+      |                                                ^~
+src/atv.c:1929:9: note: 'snprintf' output between 1 and 3600 bytes into a destination of size 2200
+ 1929 |         snprintf(Q[nq].url, sizeof Q[nq].url, "%s", a);
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from ffout/include/libavutil/common.h:427,
+                 from ffout/include/libavutil/avutil.h:289,
+                 from ffout/include/libavutil/samplefmt.h:24,
+                 from ffout/include/libavcodec/avcodec.h:31,
+                 from ffout/include/libavformat/avformat.h:267,
+                 from src/sys_real.h:29,
+                 from src/sys.h:6,
+                 from src/ui.c:6:
+ffout/include/libavutil/mem.h:185:1: warning: 'alloc_size' attribute ignored on a function returning 'int' [-Wattributes]
+  185 | av_alloc_size(2, 3) int av_reallocp_array(void *ptr, size_t nmemb, size_t size);
+      | ^~~~~~~~~~~~~
