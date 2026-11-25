@@ -20,10 +20,10 @@ HOME TABS (L1 / R1 or L2 / R2 to switch)
   Search  - search videos or collections; recent searches are kept
   Guide   - hand-picked collections by category (edit guide.txt)
   Saved   - your bookmarks: shows, collections and searches (Y anywhere saves)
-  Lists   - your playlists
+  Lists   - your playlists (Y renames, X deletes)
   Files   - the download queue, paused downloads, then the videos on your card
   (gear)  - Settings: music, menu sounds, scanlines, theme, vsync,
-            group episodes, turn off after downloads, thumbnails,
+            group episodes, turn off after downloads, thumbnails, subtitles,
             Update, About
 
 BUTTONS
@@ -50,7 +50,8 @@ THUMBNAILS (Settings, on by default)
   A little picture of the selected show, item or episode shows at the right of
   the list (Internet Archive's own preview, or a still from the video). Your
   downloaded videos get a frame from the video itself, no Wi-Fi needed.
-  Pictures are kept in thumbs/ so they show at once next time.
+  Pictures are kept in thumbs.pack (10 MB at most, oldest go first) so they
+  show at once next time.
 
 UPDATES (Settings > Update ArchiveTV, needs Wi-Fi)
   At start ArchiveTV quietly checks for a new version and says so at the bottom
@@ -70,12 +71,24 @@ A VIDEO (press A on a file)
 FILES TAB
   Queue items: Watch now, Pause / Resume download, Delete download.
   Paused downloads keep what they have and pick up where they stopped.
-  Videos: Play, Add to playlist, Delete. START plays right away.
+  Videos: Play, Add to playlist, Playlist of "<show>", Delete. START plays.
+  Playlist of "<show>" puts every downloaded episode of that show into a
+  playlist named after it, in episode order. Episodes you download later
+  join it by themselves.
+  Y marks videos (+). Then A: add all the marked ones to a playlist, or delete them.
+  X changes the order: newest download first, A to Z, biggest first.
 
 PLAYING
   A / START pause        LEFT/RIGHT -/+10 s     DOWN/UP or L1/R1 -/+1 min
-  L2/R2 -/+5 min         SELECT start over      Y show/hide the time bar
+  L2/R2 -/+5 min         SELECT fit/zoom/stretch Y subtitles on/off/track
   X screen off/on        B / MENU stop          It remembers where you stopped.
+
+SUBTITLES (Settings, on by default)
+  Shown when the video has text subtitles of its own (SRT, ASS/SSA, MP4 text)
+  or Internet Archive has a matching .srt / .vtt file next to it, which is
+  downloaded along with the video. Y switches between them and off.
+  Picture subtitles (DVD / Blu-ray rips) and non-Latin scripts aren't shown.
+  For your own videos: put "<video name>.srt" next to the video.
 
 FILES IN THIS FOLDER
   videos/       downloaded videos       playlists/   one .txt per playlist
