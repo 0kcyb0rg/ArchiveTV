@@ -83,7 +83,29 @@ static SDL_Surface *video_mode(int vsync) {
     if (!s) { s = SDL_SetVideoMode(W, H, 32, SDL_SWSURFACE); if (s) logf_("video: vsync off"); }
     return s;
 }
+#ifdef SHOTS
+/* test builds only: while an empty "shots" folder is in the app folder, a picture of the screen every 2.5 s
+   (only when it changed) as shots/NNN.raw: 640x480, 4 bytes a pixel (0x00RRGGBB) */
+static void shot_maybe(const uint32_t *src) {
+    static double last = 0; static unsigned lastsum = 0; static int n = 0, on = -1;
+    double t = now_s();
+    if (t - last < 2.5 || n >= 400) return;
+    last = t;
+    char d[700]; snprintf(d, sizeof d, "%s/shots", appdir);
+    if (on < 0) on = access(d, F_OK) == 0;
+    if (!on) return;
+    unsigned sum = 0; for (int i = 0; i < W * H; i += 7) sum = sum * 31 + src[i];
+    if (sum == lastsum) return;
+    lastsum = sum;
+    char p[760]; snprintf(p, sizeof p, "%s/%03d.raw", d, n++);
+    FILE *f = fopen(p, "wb"); if (!f) return;
+    fwrite(src, 4, (size_t)(W * H), f); fclose(f);
+}
+#endif
 static void present(const uint32_t *src) {
+#ifdef SHOTS
+    shot_maybe(src);
+#endif
     if (!scr) return;
     SDL_LockSurface(scr);
     uint8_t *px = (uint8_t *)scr->pixels;
