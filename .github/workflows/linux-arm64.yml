@@ -50,6 +50,8 @@ jobs:
             for l in libavcodec.so.56 libavformat.so.56 libavutil.so.54 libswresample.so.1; do cp -L "ffout/lib/$l" pkg/archivetv/libs/; done
             (cd App/ArchiveTV && cp -R README.txt guide.txt channels.txt cacert.pem icon.png music sfx overlays licenses ../../pkg/archivetv/)
             cp linux/ArchiveTV.sh pkg/ && chmod +x pkg/ArchiveTV.sh
+            cp linux/README-Linux.txt pkg/ && cp linux/README-Linux.txt pkg/archivetv/
+            rm -f pkg/archivetv/licenses/curl-* pkg/archivetv/licenses/Apache-2.0-OpenSSL.txt   # no curl of our own in this build
             (cd pkg && zip -qr -X "../out/ArchiveTV-linux-arm64-$V-beta.zip" .)
           else echo "build failed" > out/FAILED.txt; fi
           cd out
