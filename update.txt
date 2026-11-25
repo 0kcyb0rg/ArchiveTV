@@ -1,8 +1,8 @@
 archivetv-update 1
-version 1.5
-base https://raw.githubusercontent.com/mroxfordyazuka/ArchiveTV/f505199976b6afb273c1e0218d510de82026ac24/App/ArchiveTV/
-file 3ad17a86 5007 README.txt
-file c38f235f 190552 archivetv
+version 1.6
+base https://raw.githubusercontent.com/mroxfordyazuka/ArchiveTV/94f263fca58583dd055fc8b9d2df1591b5524572/App/ArchiveTV/
+file 56dba000 5817 README.txt
+file 7bc2d09e 212920 archivetv
 file f97aee3d 224606 cacert.pem
 file 75cb0707 257 config.json
 file 00000000 0 full_resolution
