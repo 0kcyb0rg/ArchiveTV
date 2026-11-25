@@ -1,0 +1,55 @@
+name: Linux arm64 (RG35XX Plus family, TrimUI Smart Pro / Brick)
+on:
+  push:
+    branches: [main]
+    paths: ['src/**', 'linux/**', 'App/ArchiveTV/**', '.github/workflows/linux-arm64.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    container: debian:bullseye   # an old glibc (2.31), so the build runs on older handheld firmware too
+    steps:
+      - name: Tools
+        run: apt-get update -q && apt-get install -y -q build-essential git pkg-config libsdl2-dev zip ca-certificates file
+      - uses: actions/checkout@v4
+      - name: FFmpeg 2.4 (LGPL, the same parts as the Miyoo build)
+        run: |
+          git config --global --add safe.directory '*'
+          git clone -q --depth 1 --branch n2.4.14 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
+          cd ffmpeg-src
+          ./configure --prefix="$PWD/../ffout" --arch=aarch64 --target-os=linux --enable-shared --disable-static --disable-programs --disable-doc \
+            --disable-avdevice --disable-avfilter --disable-swscale --disable-postproc --disable-avresample --disable-network \
+            --disable-debug --disable-iconv --disable-xlib --disable-everything \
+            --enable-decoder=h264,mpeg4,msmpeg4v1,msmpeg4v2,msmpeg4v3,mpeg1video,mpeg2video,h263,h263p,theora,vp3,vp6,vp6f,vp8,flv,mjpeg,wmv1,wmv2,wmv3,vc1,aac,aac_latm,mp3,mp3float,mp2,mp1,vorbis,opus,ac3,eac3,flac,alac,pcm_s16le,pcm_s16be,pcm_u8,pcm_s24le,adpcm_ms,adpcm_ima_wav,wmav1,wmav2,cinepak,indeo3,svq1,svq3,rv10,rv20,rv30,rv40,cook,ra_144,ra_288 \
+            --enable-demuxer=mov,matroska,avi,ogg,mpegts,mpegps,flv,mp3,aac,wav,asf,mpegvideo,h264,m4v,rm,dv,ac3,flac \
+            --enable-parser=h264,mpeg4video,mpegvideo,mpegaudio,aac,aac_latm,vorbis,vp3,vp8,ac3,flac,opus,h263,vc1,cook \
+            --enable-protocol=file,pipe --enable-bsf=aac_adtstoasc,h264_mp4toannexb --extra-cflags="-O2" 2>&1 | tail -5
+          make -j"$(nproc)" >/dev/null && make install >/dev/null
+      - name: ArchiveTV
+        run: |
+          gcc -O2 -DREALHDR -Wall -Wno-unused-function -Wno-deprecated-declarations -Wno-incompatible-pointer-types \
+            -Iffout/include $(sdl2-config --cflags) src/atv.c src/ui.c src/plat_sdl2.c -o archivetv \
+            -Lffout/lib -lavformat -lavcodec -lswresample -lavutil $(sdl2-config --libs) -lpthread -lm 2>&1 | tee build.log
+          test -x archivetv && file archivetv && strip archivetv
+      - name: Package and publish to the linux-builds branch
+        if: always()
+        run: |
+          set -x
+          V=$(sed -n 's/.*APP_VERSION "\(.*\)".*/\1/p' src/version.h)
+          mkdir -p out pkg/archivetv/libs
+          cp build.log out/ 2>/dev/null || true
+          if [ -x archivetv ]; then
+            cp archivetv pkg/archivetv/
+            for l in libavcodec.so.56 libavformat.so.56 libavutil.so.54 libswresample.so.1; do cp -L "ffout/lib/$l" pkg/archivetv/libs/; done
+            (cd App/ArchiveTV && cp -R README.txt guide.txt channels.txt cacert.pem icon.png music sfx overlays licenses ../../pkg/archivetv/)
+            cp linux/ArchiveTV.sh pkg/ && chmod +x pkg/ArchiveTV.sh
+            (cd pkg && zip -qr -X "../out/ArchiveTV-linux-arm64-$V-beta.zip" .)
+          else echo "build failed" > out/FAILED.txt; fi
+          cd out
+          git init -q -b linux-builds
+          git config user.name "github-actions"; git config user.email "actions@github.com"
+          echo "Built from ${GITHUB_SHA} on $(date -u)" > README.md
+          git add -A && git commit -q -m "Linux arm64 build from ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" linux-builds

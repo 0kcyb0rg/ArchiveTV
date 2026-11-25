@@ -1838,7 +1838,11 @@ close_out:
 static int has_wifi = 1;
 static void detect_device(void) {
     /* screen: Onion switches the framebuffer to 752x560 on a Mini v4 / Flip when the app folder has "full_resolution" */
+#ifndef REALHDR
     int fd = open("/dev/fb0", O_RDONLY);
+#else
+    int fd = -1;   /* SDL2 scales our 640x480 to whatever screen it is */
+#endif
     if (fd >= 0) {
         unsigned v[40]; memset(v, 0, sizeof v);
         if (ioctl(fd, FBIOGET_VSCREENINFO, v) == 0 && v[0] >= 320 && v[0] <= WMAX && v[1] >= 240 && v[1] <= HMAX) { W = (int)v[0] & ~1; H = (int)v[1] & ~1; }
@@ -2108,11 +2112,15 @@ static int st_ok = -1;   /* the stat64 layout checked against the real size once
 static long file_mtime(const char *path, long long size) {
     if (!st_ok) return 0;
     uint64_t b[24]; memset(b, 0, sizeof b);
+#ifdef REALHDR
+    { struct stat st; (void)b; (void)size; if (stat(path, &st) != 0) return 0; return (long)st.st_mtime; }
+#else
     if (__xstat64(3, path, b) != 0) return 0;
     const uint8_t *q = (const uint8_t *)b;
     long long sz; long mt; memcpy(&sz, q + 48, 8); memcpy(&mt, q + 80, 4);
     if (st_ok < 0) { st_ok = sz == size; if (!st_ok) logf_("files: can't read dates here (stat size %lld, real %lld)", sz, size); }
     return st_ok ? mt : 0;
+#endif
 }
 static int cmp_df(const void *a, const void *b) {
     const DFile *x = a, *y = b;
@@ -3418,6 +3426,9 @@ static void rm_rf(const char *path) {
 /* at launch: fetch update.txt quietly in the background; upd_poll looks at it later */
 static char upd_bad[16];          /* a version that was installed but didn't start, and was put back */
 static void upd_start_check(void) {
+#ifdef REALHDR
+    return;   /* the Linux build: updates come from its GitHub release for now (the list is for the Miyoo's files) */
+#endif
     char p[760];
     /* launch.sh just installed an update, and here we are: it works. Keep it (drop the backup of the old files).
        Every version must do this, or launch.sh puts the old one back when it closes. */
@@ -3511,6 +3522,9 @@ static int upd_fetch(const char *base, UFile *u, long long done, long long total
     return 1;
 }
 static void app_update(void) {
+#ifdef REALHDR
+    ask("Updates", "New versions are on GitHub,", "on the ArchiveTV releases page.", MOOD_HAPPY, "A:OK"); return;
+#endif
     if (upd_ready) {
         int k = ask("Update ready", "Restart to finish updating.", "Videos and settings are kept.", MOOD_HAPPY, "A:Restart now  B:Later");
         if (k == K_A) { g_exit_code = 42; g_quit = 1; }
